@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.venv/
+venv/
+build/
+dist/
+
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Local config & data (never commit real config or model/voice/DB files)
+companion/config/config.yaml
+data/
+*.onnx
+*.wav
+!companion/personas/**/*.wav
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# legacy/ (archived Node app — see CLAUDE.md): never commit its installed
+# deps or local data dumps, only its source
+legacy/**/node_modules/
+legacy/**/chroma_data/
+legacy/**/dist/
+legacy/**/build/
+
+# legacy/frontend3 and frontend4 each carry their own leftover nested .git/
+# (independent repos from whenever they were cloned/downloaded) — excluded
+# wholesale rather than letting git create broken gitlink/submodule entries
+# for them with no matching .gitmodules. Their source isn't lost, just not
+# part of this repo; ask if you actually want them folded in properly.
+legacy/frontend3/
+legacy/frontend4/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

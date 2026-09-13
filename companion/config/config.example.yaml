@@ -1,0 +1,163 @@
+# Copy to config.yaml and edit. This one file is the only place backend
+# selection happens — nothing in core/, backends/, or memory/ should ever
+# be imported directly by name from application code; the app reads this
+# file and constructs whichever concrete class each `backend:` key names.
+#
+# Every `options:` block is passed as keyword args to that backend's
+# constructor (see the matching class in companion/backends/**).
+
+personas:
+  directory: ./companion/personas   # loader scans this dir for *.yaml
+
+# --- Speech-to-text -----------------------------------------------------
+# Trade-offs (see companion/backends/stt/whisper_local.py docstring and
+# docs/HARDWARE_REQUIREMENTS.md for the full explanation):
+#   model_size          bigger = more accurate, slower per re-transcription
+#                        pass = laggier partial transcripts. tiny/base for
+#                        snappy CPU partials, small is the default middle
+#                        ground, medium/large-v3 want a GPU to stay live.
+#   min_refresh_seconds lower = fresher partials, more compute spent
+#                        re-transcribing the same growing buffer.
+stt:
+  backend: faster_whisper            # faster_whisper | whisper_cpp (not yet implemented)
+  options:
+    model_size: small                # tiny | base | small | medium | large-v3
+    device: auto                     # auto | cuda | cpu
+    compute_type: default            # default | int8 | float16 | ...  (ctranslate2 compute type)
+    language: null                   # null = auto-detect, or an ISO 639-1 code e.g. "en"
+    min_refresh_seconds: 1.0         # seconds of new audio before re-transcribing
+    max_buffer_seconds: 30.0         # hard cap on one utterance's buffered audio
+
+# --- Text-to-speech -------------------------------------------------------
+# See companion/backends/tts/piper_local.py and coqui_local.py module
+# docstrings for what "streaming" means for each (sentence-granularity,
+# not incremental within a sentence — see those docstrings before assuming
+# otherwise) and for voice-cloning status (Coqui only, shape-ready but not
+# wired up).
+tts:
+  backend: piper                     # piper | coqui
+  voices_dir: ./data/voices          # resolves a persona's voice_id (e.g.
+                                      # "piper:en_US-lessac-medium") via
+                                      # PiperTTS.from_voice_id / CoquiTTS.from_voice_id
+                                      # once the persona loader exists — see personas/schema.md
+  options:
+    # Fallback/default voice: used directly (bypassing voice_id
+    # resolution) if a persona doesn't specify one, or for single-voice
+    # deployments that don't need per-persona voices at all.
+    voice_model_path: ./data/voices/en_US-lessac-medium.onnx
+    use_cuda: false
+    sample_rate: null                 # null = inferred from the loaded voice;
+                                       # set only to assert a specific rate and
+                                       # fail loudly on mismatch, not to resample
+  # Coqui example (higher fidelity; voice cloning is documented but not
+  # wired up yet — see coqui_local.py's module docstring):
+  # backend: coqui
+  # options:
+  #   model_name: tts_models/multilingual/multi-dataset/xtts_v2
+  #     # NOTE: XTTS-v2's model weights are CPML-licensed (non-commercial)
+  #     # — see THIRD_PARTY_LICENSES.md before using this as a default in
+  #     # anything commercially distributed.
+  #   speaker: null
+  #   speaker_wav: null                # set for voice cloning once that's wired up
+  #   language: en
+  #   use_gpu: false
+  #   sample_rate: null
+  #   chunk_frames: 4096                # output PCM chunk size for playback streaming
+
+# --- LLM ------------------------------------------------------------------
+# See companion/backends/llm/ollama_local.py's module docstring for the
+# model-choice justification (Apache-2.0 license, not just "similar
+# quality to Llama 3.1 8B") and for a real gotcha in how Ollama's
+# streaming errors surface.
+llm:
+  backend: ollama
+  options:
+    host: http://localhost:11434
+    model: qwen2.5:7b-instruct       # 7-8B class, no strict latency budget in text mode
+    temperature: 0.7
+    num_predict: null                # null = Ollama's own default max tokens
+    top_p: null
+    top_k: null
+    seed: null                       # set for reproducible output (e.g. tests)
+    stop: null                       # e.g. ["User:"] to stop generation at a turn boundary
+  # Separate, smaller model for voice mode to hit latency targets — the
+  # orchestrator picks between `llm` and `llm_voice_override` by mode, this
+  # is config, not a second code path (see core/orchestrator/).
+  voice_mode_override:
+    options:
+      model: qwen2.5:3b-instruct
+
+# --- Voice activity detection ---------------------------------------------
+# See companion/backends/vad/silero_vad.py's module docstring: Silero's
+# model requires exactly 512 samples/frame at 16kHz (256 at 8kHz) — a hard
+# constraint, not tunable — and threshold/min_speech_duration_ms/
+# min_silence_duration_ms together implement debouncing close to Silero's
+# own VADIterator (a raw per-frame threshold flickers on brief dips).
+# min_silence_duration_ms is what actually drives end-of-utterance timing
+# in the orchestrator's voice-turn state machine — see
+# docs/ARCHITECTURE.md's "Voice-turn state machine" section.
+vad:
+  backend: silero
+  options:
+    threshold: 0.5
+    sample_rate: 16000               # 16000 | 8000 — determines the hard frame_bytes requirement
+    min_speech_duration_ms: 250.0    # consecutive speech before onset registers (ignores brief noise)
+    min_silence_duration_ms: 100.0   # sustained silence before end-of-utterance/offset registers
+
+# --- Long-term memory -------------------------------------------------------
+# See companion/memory/store.py's module docstring and docs/MEMORY_STORE.md
+# for the design (storage/embedding choice, per-(user,persona) scoping,
+# ordering, the dedup gap's resolution). Embeddings use Chroma's own
+# default (ONNX MiniLM-L6, local, no extra dependency beyond chromadb
+# itself) unless a different embedding_function is passed in at
+# construction time.
+memory:
+  backend: chroma                    # chroma | memark | lancedb (not yet implemented)
+  options:
+    persist_dir: ./data/memory
+  summarizer:
+    trigger_turn_count: 50           # RollingSummarizer itself is still unimplemented (companion/memory/summarizer.py)
+  # MemArk backend (experimental) — hybrid graph + recency/keyword
+  # retrieval over a local SQLite-backed graph, in place of Chroma's flat
+  # vector search. See docs/MEMARK_BACKEND.md (why/tradeoffs — notably:
+  # worse raw recall than Chroma on MemArk's own published benchmarks,
+  # salience decay causing old memories to stop surfacing by design, no
+  # measured latency numbers yet) and docs/MEMARK_RETRIEVAL_ADAPTER.md
+  # (the adapter this backend actually wires in) before choosing this
+  # over chroma above. Needs the memory-memark extra:
+  # pip install -e ".[memory-memark]" — companion/app.py's build_memory
+  # fails loudly at startup with a plain ImportError if it's missing.
+  # backend: memark
+  # options:
+  #   persist_dir: ./data/memark      # one SQLite file per (user_id, persona_id) here
+  #   # embedding_function: only settable in code, not from this YAML —
+  #   #   omit/null here always means MemArkMemoryStore's own default
+  #   #   (Chroma's standalone DefaultEmbeddingFunction, ONNX MiniLM, no
+  #   #   torch); construct MemArkMemoryStore directly instead of via
+  #   #   config if you need a different one.
+
+# --- Audio I/O (voice mode) -------------------------------------------------
+# Real microphone capture + speaker playback — see companion/audio/'s
+# module docstrings and docs/ARCHITECTURE.md's "Voice mode audio I/O"
+# section. Structurally required even for a text-mode-only config (like
+# stt/tts/vad, which text mode also never calls into) — only
+# companion/voice_app.py actually constructs anything from this section.
+# sample_rate MUST match vad.options.sample_rate above (Silero's hard
+# frame-size constraint depends on it) — companion/voice_app.py checks
+# this at startup and fails clearly, not silently, on a mismatch; this
+# loader doesn't cross-check option *contents* between sections (see
+# companion/config/loader.py's module docstring for why).
+audio:
+  backend: sounddevice
+  options:
+    sample_rate: 16000                # must match vad.options.sample_rate
+    input_device: null                # null = system default input device;
+                                       # int index or a substring of a device
+                                       # name to pick a specific one — run
+                                       # `python -m sounddevice` to list what's
+                                       # available
+    output_device: null               # null = system default output device
+    channels: 1
+
+# --- Runtime mode -----------------------------------------------------------
+mode: text                           # text | voice

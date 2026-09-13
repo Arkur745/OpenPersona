@@ -1,0 +1,86 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "companion"
+version = "0.0.1"
+description = "Local-first, open-source AI companion — voice/text chat with swappable personas."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }  # covers this repo's own code only — see THIRD_PARTY_LICENSES.md for bundled/downloaded model weights
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+# Install only the backends you actually run — this is what keeps the
+# local-first path from dragging in every ML framework at once. Combine
+# groups as needed, e.g.: pip install -e ".[stt-whisper,tts-piper,llm-ollama,vad-silero,memory-chroma]"
+[project.optional-dependencies]
+stt-whisper = ["faster-whisper>=1.0", "numpy>=1.26"]
+tts-piper = ["piper-tts>=1.2"]
+# Not the original `TTS` PyPI package — Coqui the company shut down in
+# Jan 2024 and coqui-ai/TTS is unmaintained (last release 0.22, Nov 2023).
+# `coqui-tts` (idiap/coqui-ai-TTS) is the actively maintained community
+# fork; it's a drop-in replacement importable as `TTS`, same as upstream.
+# `transformers<5` is pinned deliberately, not a stale leftover: coqui-tts
+# 0.27.5 declares `transformers>=4.57` with no upper bound, but pulling
+# unconstrained latest (5.x, as of writing) breaks its own XTTS import
+# (`ImportError: cannot import name 'isin_mps_friendly'`) — verified by
+# installing it unpinned and hitting that failure directly. `[codec]`
+# avoids a separate `torchcodec` install error with torch>=2.9. torch/
+# torchaudio aren't in coqui-tts's own dependency list (deliberately, so
+# CPU/CUDA builds stay the installer's choice) — verified that omitting
+# them leaves `import TTS` failing, so they're named here explicitly. For
+# a CUDA build, install torch yourself first from
+# https://pytorch.org/get-started/locally/ before this extra.
+tts-coqui = ["coqui-tts[codec]>=0.24", "transformers>=4.57,<5", "torch>=2.2", "torchaudio>=2.2"]
+# httpx is a transitive dependency of `ollama` (used to talk to the local
+# server), but named here explicitly too since ollama_local.py imports it
+# directly to catch httpx.TransportError — see that module's docstring for
+# why (streaming connection errors aren't wrapped by ollama's own
+# ConnectionError the way non-streaming ones are).
+llm-ollama = ["ollama>=0.3", "httpx>=0.27"]
+vad-silero = ["silero-vad>=5.1", "torch>=2.2"]
+memory-chroma = ["chromadb>=0.5"]
+memory-lancedb = ["lancedb>=0.13"]
+# For companion/memark/ — the MemArk retrieval adapter (docs/
+# MEMARK_RETRIEVAL_ADAPTER.md). GraphMemoryManager needs networkx;
+# FaissVectorStore needs faiss-cpu (+ numpy, already in `dev`). chromadb
+# is here too — not for its Chroma-collection machinery, only for its
+# standalone DefaultEmbeddingFunction (ONNX MiniLM, no torch), reused as
+# this adapter's default embedder instead of MemArk's own
+# EmbeddingManager specifically to avoid the torch dependency that would
+# pull in — see companion/memark/retrieval.py's module docstring.
+# Deliberately NOT `pip install memark` — that package's own
+# pyproject.toml declares torch (via sentence-transformers), neo4j,
+# qdrant-client, google-generativeai, groq, and streamlit as
+# unconditional dependencies, none of which anything this project calls
+# needs. The specific files actually used are vendored instead — see
+# companion/memark/_vendor/PROVENANCE.md.
+memory-memark = ["networkx>=3.0", "faiss-cpu>=1.7", "chromadb>=0.5"]
+# sounddevice (PortAudio bindings) for real mic capture + speaker
+# playback in voice mode — see companion/audio/'s module docstrings.
+# Picked over PyAudio: actively maintained, ships prebuilt wheels
+# (including PortAudio itself) for Windows/macOS/manylinux so it doesn't
+# need system PortAudio headers the way PyAudio's sdist build does, and
+# its Raw*Stream classes work directly with raw bytes (no numpy required
+# just for audio I/O, though numpy is a transitive PortAudio-wheel
+# dependency of sounddevice itself). Nothing already in this project
+# provides mic/speaker I/O — faster-whisper/piper/coqui/silero all
+# consume/produce raw PCM bytes but none of them touch an audio device.
+audio-sounddevice = ["sounddevice>=0.4"]
+# `ollama` (+ its own httpx/pydantic deps) is here, not only in llm-ollama,
+# so OllamaLLM's offline/mocked tests can construct real ResponseError /
+# httpx.TransportError instances to test error-path handling without a
+# live server — same reasoning as numpy being here for STT/TTS logic
+# tests. It's lightweight (no torch/heavy ML deps), unlike the other
+# backend extras.
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "ruff>=0.6", "numpy>=1.26", "ollama>=0.3", "httpx>=0.27"]
+
+[tool.setuptools.packages.find]
+include = ["companion*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

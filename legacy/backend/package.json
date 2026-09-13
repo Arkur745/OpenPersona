@@ -1,0 +1,31 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "Backend for aifu app",
+  "license": "ISC",
+  "author": "",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "nodemon index.js"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  },
+  "dependencies": {
+    "@elevenlabs/elevenlabs-js": "^2.20.1",
+    "@google/genai": "^1.26.0",
+    "@google/generative-ai": "^0.24.1",
+    "@huggingface/inference": "^4.13.0",
+    "@pinecone-database/pinecone": "^6.1.2",
+    "cloudinary": "^2.8.0",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "mongodb": "^6.20.0",
+    "mongoose": "^8.19.1",
+    "uuid": "^13.0.0",
+    "vectra": "^0.11.1"
+  }
+}
