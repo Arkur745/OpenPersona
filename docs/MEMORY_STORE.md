@@ -27,6 +27,16 @@ directly, not assumed:
 
 `PersistentClient` is a pure local-file client (SQLite + a local vector
 index under `path`); there is no daemon/server process to run or manage.
+Verified on disk with chromadb 1.5.9 by listing the tables of a real
+`data/memory/chroma.sqlite3`. That SQLite file holds the collections,
+every stored turn's text (`embeddings` + full-text-search tables), its
+`role`/`timestamp` metadata (`embedding_metadata`), and the write log
+including the vectors themselves (`embeddings_queue`). The HNSW
+nearest-neighbour index lives beside it as binary files, one directory
+per collection (`data_level0.bin`, `link_lists.bin`, ...). So SQLite is
+the system of record, and the HNSW files are the search index over it.
+Persistence across real process restarts is tested; see
+`tests/test_memory_persistence_across_processes.py`.
 LanceDB is equally embedded (Arrow/Lance files on disk, no server either)
 — so "requires no server" doesn't decide it either way, both qualify.
 

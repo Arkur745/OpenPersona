@@ -4,12 +4,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`companion` is an open-source, local-first AI companion app: voice/text
+**OpenPersona** (repo `Arkur745/OpenPersona`; Python package/CLI name
+`companion`) is an open-source, local-first AI companion app: voice/text
 chat with a swappable persona (mentor, friend, romantic companion, or
-community-contributed), running on local models by default. A cloud-backed
-hosted demo is a planned later phase — **do not build cloud
-backends/adapters, hosted infra, or auth/billing unless explicitly
-instructed**, even if a task seems to gesture toward it.
+community-contributed), running on local models by default. The
+deployed, cloud-hosted version is a **separate project in a separate
+repo**, not a phase of this one. **Do not build cloud backends/adapters,
+hosted infra, or auth/billing in this repo**, even if a task seems to
+gesture toward it. This repo's claim is "fully offline-capable"
+(`scripts/check_offline.py` checks it), and a cloud dependency here would
+break that.
 
 **Current state: both text and voice mode are real, runnable apps
 (`python -m companion`, mode picked by `config.yaml`).** Directory
@@ -150,7 +154,20 @@ pip install -e ".[dev,audio-sounddevice]" # test_real_mic_capture_smoke /
                                        # audio I/O" testing-reality-check
                                        # subsection for exactly what these
                                        # do and don't verify.
+pip install -e ".[dev,memory-chroma,memory-memark]"
+                                       # tests/test_memory_persistence_across_processes.py —
+                                       # every step in its own subprocess
+                                       # (tests/_persistence_child.py), both
+                                       # backends; ~1 min. Its real-app test
+                                       # also needs local Ollama (skips otherwise).
 ```
+
+`scripts/check_offline.py` is the offline-capability check: it blocks
+non-localhost sockets/DNS, then runs every configured backend for real
+(TTS → VAD → STT audio round trip included). It needs downloaded
+models and a running Ollama server, so it's run by hand, not by
+`pytest`. Its network guard is unit-tested in `tests/test_check_offline.py`.
+If you add a backend, add it to that script too.
 
 `tests/test_orchestrator_voice_turn.py` tests the full voice-turn state
 machine (including barge-in) entirely with fakes — no optional deps

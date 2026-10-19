@@ -504,6 +504,27 @@ this project doesn't have).
   `docs/MEMARK_RETRIEVAL_ADAPTER.md` section 8 made about `write()`'s own
   failure-rollback question).
 
+### Persistence across real process restarts (both backends)
+
+`tests/test_memory_persistence_across_processes.py` runs each step in a
+separate short-lived process (`tests/_persistence_child.py`) against
+one shared directory, so nothing can carry over in process memory. Same-
+process "fresh instance" tests (as in `tests/test_memark_retrieval.py`)
+can pass because of module-level caches or open SQLite connections;
+these can't. It covers, for both `chroma` and `memark` and built through
+`companion.app.build_memory` as the app does:
+- write in one process, query in the next, with exact `Turn` equality
+  including timestamps (the orchestrator's dedup depends on it), persona
+  scoping, and deletes staying deleted;
+- `Orchestrator.handle_text_turn`: a fact from session one appears in
+  session two's LLM prompt, with an empty `recent_turns` (recording fake
+  LLM, real memory, real `PromptBuilder`);
+- two real `python -m companion` text-mode runs against local Ollama,
+  where the second must answer from the first's memory (skips without
+  Ollama). Run for real on 2026-10-19 with `dolphin-llama3:8b`: both
+  backends answered correctly. With an empty memory directory, the same
+  question got "New York City", so the answer really comes from memory.
+
 ## App bootstrap (implemented, both modes)
 
 `companion/config/loader.py` (`load_config`, `resolve_config_path`) +

@@ -1,6 +1,7 @@
-# Companion
+# OpenPersona
 
-An open-source, local-first AI companion. Talk (voice or text) with a
+An open-source, local-first AI companion. (The Python package and CLI
+are named `companion` — `python -m companion`.) Talk (voice or text) with a
 persona of your choice — a wise old mentor, a casual friend, a romantic
 companion, or one the community writes — running on local models by
 default, with no external server required to get started.
@@ -21,8 +22,9 @@ root `CLAUDE.md` for exactly what's implemented vs. not.
 - VAD: [Silero VAD](https://github.com/snakers4/silero-vad)
 - Memory: [Chroma](https://www.trychroma.com/) (embedded, no external DB server; LanceDB named as a future alternative, not yet implemented) — an experimental MemArk graph-memory backend is also wired in, see "Memory backend" below
 
-A cloud-backed hosted demo mode is planned for after the local-first core
-is solid — see `docs/ARCHITECTURE.md`'s "Build order." It is not built yet.
+A deployed, cloud-hosted version is planned as a **separate project**,
+not part of this repo — nothing here talks to a cloud service. See
+`docs/ARCHITECTURE.md`'s "Build order."
 
 ## Running the app
 
@@ -144,6 +146,39 @@ directly with any SQLite browser if you want to see what's actually
 stored. If `memory-memark`'s extras aren't installed, selecting this
 backend fails with a clear import error at startup, before any
 conversation loop runs, not partway through one.
+
+### Memory survives restarts (and how that's tested)
+
+Both backends persist to `persist_dir` and pick up where they left off on
+the next `python -m companion` run. `tests/test_memory_persistence_across_processes.py`
+proves this with real, separate processes, never a second store object
+in the same process: one process writes and exits, a new one reads. It
+runs for both backends at three levels: store write/query/delete
+(including persona scoping and exact timestamps); the orchestrator, where
+a fact from session one reaches session two's LLM prompt with no live
+history; and two real `python -m companion` runs against a local Ollama
+server, where the second run has to answer a question only the first
+run's memory can answer (skipped without Ollama). As a control, the same
+question with an empty memory directory got a wrong answer.
+
+### Checking that it runs offline
+
+After models and voices have been downloaded once:
+
+```
+python scripts/check_offline.py            # uses config.yaml, like the app
+```
+
+This blocks every non-localhost connection and DNS lookup at Python's
+socket layer, then runs each configured backend for real: an Ollama
+reply, write + query on both memory backends, and a real audio round
+trip. TTS speaks a sentence, Silero VAD detects the speech in it, and
+faster-whisper transcribes it back. It lists any connection attempts it
+blocked. faster-whisper tries `huggingface.co` to check for model
+updates, then falls back to its local cache. Backends whose extras
+aren't installed are reported as SKIP. Limit: native code that opens its
+own sockets isn't covered, so for a full guarantee, run it with the
+network actually off.
 
 See `docs/CONTRIBUTING.md` for the full contributor setup and
 `docs/PERSONA_AUTHORING.md` to add a persona (no code changes required).

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "companion"
 version = "0.0.1"
-description = "Local-first, open-source AI companion — voice/text chat with swappable personas."
+description = "OpenPersona — local-first, open-source AI companion: voice/text chat with swappable personas."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }  # covers this repo's own code only — see THIRD_PARTY_LICENSES.md for bundled/downloaded model weights
