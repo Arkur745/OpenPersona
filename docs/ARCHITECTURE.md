@@ -792,5 +792,37 @@ Split honestly, not blurred:
   is integrated. XTTS-v2 in particular ships under Coqui's non-commercial
   CPML; don't enable it as a default voice in anything commercial without
   reading that file first.
-- **UI framework**: deferred per the project brief — text/voice client
-  framework choice is not part of this phase's scaffold.
+- **UI framework**: no longer fully open — `companion/ui/streamlit_app.py`
+  is a real, working Streamlit chat UI, built against the same
+  `build_*`/`Orchestrator` construction `companion/app.py`'s CLI text
+  loop uses. Text chat plus optional **push-to-talk voice** — a browser
+  mic recording (`st.audio_input`) transcribed one-shot through the same
+  `stt: SpeechToText` (`orchestrator.stt.reset()` + one
+  `transcribe_chunk()` call, not the incremental buffered path
+  `handle_voice_turn` uses), then the transcript runs through the exact
+  same `handle_text_turn` a typed message does; an optional "Speak
+  replies" toggle synthesizes the reply through the same
+  `tts: TextToSpeech` and plays it via `st.audio`. Not the CLI's
+  real-time hands-free voice mode (see its module docstring for why that
+  doesn't fit Streamlit's per-interaction rerun model without
+  substantially more plumbing) — no new abstract-interface surface,
+  UI-layer composition of the existing STT/TTS/Orchestrator contracts,
+  same as `companion/app.py`/`companion/voice_app.py` already do.
+  Verified for real: `streamlit.testing.v1.AppTest` against a real
+  config, real Ollama, and real Chroma for the text path (persona
+  selection, a real chat round trip, persona switching, and the
+  clear-chat-window control — the last one caught and fixed a real bug
+  this way: the button originally popped `recent_turns` from session
+  state instead of resetting it, which crashed the next rerun with a
+  `KeyError`); `AppTest` has no way to simulate a browser mic recording,
+  so the voice path's own functions (`_wav_bytes_to_pcm16_mono`,
+  `_transcribe_clip`, `_synthesize_reply`) were instead verified directly
+  against real audio — a real Piper-synthesized sentence, deliberately
+  resampled to a different rate to exercise the conversion path, wrapped
+  in a real WAV container, decoded and fed through real
+  `FasterWhisperSTT`, returning the original sentence correctly. The
+  actual browser-mic-click-record UI path itself is *not* something this
+  verified — same "can't claim tested without a real browser/mic" honesty
+  standard `companion/audio/`'s own testing-reality-check already holds
+  the CLI's real mic/speaker code to. Not treated as the final or only UI
+  this project will ever have — see `companion/ui/README.md`.

@@ -414,5 +414,15 @@ without being asked):
   ongoing concern — see `THIRD_PARTY_LICENSES.md`, and update it whenever
   a new backend or new default model is integrated; don't assume MIT
   extends to a model just because the code loading it does.
-- **UI framework** — deliberately undecided (`companion/ui/README.md`).
-  Don't scaffold a specific framework without that decision being made.
+- **UI framework** — resolved for a first UI: Streamlit
+  (`companion/ui/streamlit_app.py`), built against the same
+  `build_*`/`Orchestrator` construction the CLI text loop uses — text
+  chat plus optional push-to-talk voice (record a clip, transcribed
+  one-shot, spoken replies optional; NOT the CLI's real-time hands-free
+  voice mode, which doesn't fit Streamlit's rerun model) — see
+  `docs/ARCHITECTURE.md`'s "Open decisions" entry and
+  `companion/ui/README.md`. Not treated as the final or only UI this
+  project will ever have (real-time hands-free voice in a browser, a
+  richer web frontend, a TUI, a desktop app are all still open) — don't
+  assume Streamlit is the answer for a future UI need without checking
+  whether it still fits.

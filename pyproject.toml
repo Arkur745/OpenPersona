@@ -70,6 +70,14 @@ memory-memark = ["networkx>=3.0", "faiss-cpu>=1.7", "chromadb>=0.5"]
 # provides mic/speaker I/O — faster-whisper/piper/coqui/silero all
 # consume/produce raw PCM bytes but none of them touch an audio device.
 audio-sounddevice = ["sounddevice>=0.4"]
+# companion/ui/streamlit_app.py — the first real UI: text chat plus
+# push-to-talk voice, not the CLI's hands-free voice mode (see that
+# file's module docstring for why).
+# UI framework was deliberately left undecided until now (see
+# companion/ui/README.md's prior history) — Streamlit chosen as a fast,
+# local-first-friendly way to get a real chat window running, not a
+# final/only answer for every future UI need.
+ui-streamlit = ["streamlit>=1.30"]
 # `ollama` (+ its own httpx/pydantic deps) is here, not only in llm-ollama,
 # so OllamaLLM's offline/mocked tests can construct real ResponseError /
 # httpx.TransportError instances to test error-path handling without a

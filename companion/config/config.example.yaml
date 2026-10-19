@@ -16,14 +16,21 @@ personas:
 #                        pass = laggier partial transcripts. tiny/base for
 #                        snappy CPU partials, small is the default middle
 #                        ground, medium/large-v3 want a GPU to stay live.
+#   compute_type         MEASURED, not theoretical: on CPU, "default" can
+#                        mean unquantized float32 — a single ~6s clip took
+#                        over 3 minutes on a 20-core CPU with model_size:
+#                        small. "int8" on the same machine/clip: 0.8s
+#                        (base) / 2.5s (small), warm. Use int8 on CPU
+#                        unless you have a specific reason not to —
+#                        "default" is not a safe/fast default here.
 #   min_refresh_seconds lower = fresher partials, more compute spent
 #                        re-transcribing the same growing buffer.
 stt:
   backend: faster_whisper            # faster_whisper | whisper_cpp (not yet implemented)
   options:
-    model_size: small                # tiny | base | small | medium | large-v3
+    model_size: base                 # tiny | base | small | medium | large-v3
     device: auto                     # auto | cuda | cpu
-    compute_type: default            # default | int8 | float16 | ...  (ctranslate2 compute type)
+    compute_type: int8               # default | int8 | float16 | ...  (ctranslate2 compute type) — see compute_type note above before changing this back to "default" on CPU
     language: null                   # null = auto-detect, or an ISO 639-1 code e.g. "en"
     min_refresh_seconds: 1.0         # seconds of new audio before re-transcribing
     max_buffer_seconds: 30.0         # hard cap on one utterance's buffered audio

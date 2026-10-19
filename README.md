@@ -11,6 +11,8 @@ LLM, VAD, the persona loader, `MemoryStore`, and real mic/speaker audio
 I/O are all implemented; `python -m companion` reads config, constructs
 real backends, and runs an actual conversation with memory — text or
 voice, picked by `config.yaml`'s `mode:` — see "Running the app" below.
+A real browser UI (Streamlit: text chat plus push-to-talk voice) is also
+available as an alternative to the terminal — see "Streamlit UI" below.
 See `docs/ARCHITECTURE.md` for the design and the build order, and the
 root `CLAUDE.md` for exactly what's implemented vs. not.
 
@@ -67,6 +69,42 @@ instead of a one-line error message).
 If something's wrong — Ollama isn't running, the configured model isn't
 pulled, a persona file is malformed — you'll get a clear one-line error
 telling you what to fix, not a raw traceback (unless you pass `--debug`).
+
+### Streamlit UI (optional, instead of the terminal)
+
+A real browser chat window, with optional push-to-talk voice — same
+config, same personas, same memory backend as the CLI above, just a
+different front end onto the same `Orchestrator`. See
+`companion/ui/README.md` and that file's own module docstring for how
+voice fits in (push-to-talk, not the CLI voice mode's real-time
+hands-free experience — Streamlit's per-interaction model doesn't fit
+that without a much bigger rework).
+
+```
+pip install -e ".[dev,memory-chroma,ui-streamlit]"
+# (same config.yaml setup as Text mode above, if you haven't already)
+
+streamlit run companion/ui/streamlit_app.py
+```
+
+Opens in your browser at `http://localhost:8501`. Pick a persona from
+the sidebar dropdown (switching rebuilds just that persona's voice
+binding, not the whole app — cheap), set a `User ID` if you want a
+different memory scope than `local`, and chat. "Clear chat window"
+resets only what's shown on screen, not your companion's actual
+long-term memory.
+
+**Voice input**: install `stt-whisper` too
+(`pip install -e ".[dev,memory-chroma,ui-streamlit,stt-whisper]"`) and a
+🎤 recorder appears above the message box — record a clip, it's
+transcribed and sent exactly like a typed message.
+
+**Spoken replies**: also install `tts-piper`, then toggle "🔊 Speak
+replies" in the sidebar. This needs a *real* downloaded voice file for
+whichever persona you're talking to — the starter personas' `voice_id`s
+are placeholders (see "Voice mode" below for how to get one); without a
+real file, toggling this on just shows a clear inline warning per reply,
+it doesn't break the chat.
 
 ### Voice mode
 
