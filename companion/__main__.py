@@ -27,6 +27,7 @@ from companion.app import (
     load_personas,
     run_text_loop,
     select_persona,
+    take_due_reminders,
 )
 from companion.config.loader import load_config, resolve_config_path
 from companion.voice_app import run_voice_session
@@ -77,10 +78,17 @@ def main(argv: list[str] | None = None) -> int:
         persona = select_persona(personas, args.persona)
         orchestrator = build_orchestrator(config, persona)
 
+        check_reminders = None
+        if config.agent is not None:
+            def check_reminders():
+                return take_due_reminders(config, args.user_id, personas)
+
         if config.mode == "voice":
-            asyncio.run(run_voice_session(config, orchestrator, persona, args.user_id))
+            asyncio.run(run_voice_session(config, orchestrator, persona, args.user_id,
+                                          check_reminders=check_reminders))
         else:
-            asyncio.run(run_text_loop(orchestrator, persona, args.user_id))
+            asyncio.run(run_text_loop(orchestrator, persona, args.user_id,
+                                      check_reminders=check_reminders))
         return 0
     except KeyboardInterrupt:
         print("\nGoodbye.")

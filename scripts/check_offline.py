@@ -14,7 +14,9 @@ real, through the same `companion.app.build_*` functions
 - memory: write + query on both Chroma and MemArk, in throwaway dirs;
 - TTS: the persona's voice synthesizes a test sentence;
 - VAD: Silero detects speech in that synthesized audio;
-- STT: faster-whisper transcribes that same audio back to text.
+- STT: faster-whisper transcribes that same audio back to text;
+- agent: if the config has an `agent:` section, the agent model makes one
+  real tool call (the calculator) and answers with its result.
 
 So TTS -> VAD -> STT is a real offline audio round trip, not three
 isolated smoke calls. Any blocked connection attempt is listed at the end
@@ -120,6 +122,10 @@ def _resample_pcm16(pcm: bytes, src_rate: int, dst_rate: int) -> bytes:
     return np.interp(positions, np.arange(len(samples)), samples).astype(np.int16).tobytes()
 
 
+class _Skip(Exception):
+    """A check that doesn't apply to this config."""
+
+
 class Checks:
     def __init__(self, config, persona) -> None:
         self.config = config
@@ -204,6 +210,33 @@ class Checks:
         assert heard & expected, f"transcript doesn't match the spoken sentence: {text!r}"
         return repr(text)
 
+    async def agent(self) -> str:
+        """One real tool round trip: the agent model calls the calculator."""
+        from dataclasses import replace
+
+        from companion.app import build_agent
+        from companion.config.loader import BackendConfig
+        from companion.core.agent import TextDelta, ToolStarted
+        from companion.core.interfaces.types import Persona
+        from companion.core.prompt_builder import PromptBuilder
+
+        if self.config.agent is None:
+            raise _Skip("no agent: section in this config")
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            options = {**self.config.agent.options, "data_dir": tmp, "temperature": 0}
+            config = replace(self.config, agent=BackendConfig(self.config.agent.backend, options))
+            agent = build_agent(config, memory=None)
+            persona = Persona(id="offline_check", name="Checker", tone="Brief.",
+                              boundaries="None.", voice_id="piper:unused", tools=["calculator"])
+            built = PromptBuilder().build(persona=persona, recent_turns=[], retrieved_memory=[],
+                                          user_message="Use the calculator: what is 12.5 * 8?")
+            events = [e async for e in agent.run_stream(persona, "offline", built)]
+        tools = [e.name for e in events if isinstance(e, ToolStarted)]
+        answer = "".join(e.text for e in events if isinstance(e, TextDelta))
+        assert "calculate" in tools, f"model didn't call the calculator; it said {answer!r}"
+        assert "100" in answer, f"unexpected answer: {answer!r}"
+        return f"{options['model']} called {tools} -> {answer.strip()[:60]!r}"
+
 
 async def run(config_path: str | None, persona_id: str | None) -> int:
     from companion.app import load_personas, select_persona
@@ -222,6 +255,7 @@ async def run(config_path: str | None, persona_id: str | None) -> int:
         ("TTS", checks.tts),
         ("VAD (on TTS audio)", checks.vad),
         ("STT (on TTS audio)", checks.stt),
+        ("Agent tool call (calculator)", checks.agent),
     ]
     failures = skipped = 0
     for name, step in steps:
@@ -232,6 +266,9 @@ async def run(config_path: str | None, persona_id: str | None) -> int:
         except ImportError as exc:
             # A backend extra that isn't installed isn't an offline failure.
             detail, status = f"extra not installed ({exc.name}), not checked", "SKIP"
+            skipped += 1
+        except _Skip as exc:
+            detail, status = f"{exc}, not checked", "SKIP"
             skipped += 1
         except Exception as exc:  # noqa: BLE001 — any failure is reported, not raised
             detail, status = f"{type(exc).__name__}: {exc}", "FAIL"
@@ -250,7 +287,7 @@ async def run(config_path: str | None, persona_id: str | None) -> int:
     if failures:
         print(f"\n{failures} check(s) failed.")
     else:
-        note = f" ({skipped} skipped: install those extras to check them)" if skipped else ""
+        note = f" ({skipped} skipped, see SKIP lines above)" if skipped else ""
         print(f"\nAll checks that ran passed offline{note}.")
     return 1 if failures else 0
 

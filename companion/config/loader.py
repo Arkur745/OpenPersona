@@ -76,6 +76,9 @@ class AppConfig:
     # `llm.voice_mode_override.options`, merged over `llm.options` by
     # `companion.app.build_llm` when `mode == "voice"`. Empty = no override.
     llm_voice_override: dict[str, Any] = field(default_factory=dict)
+    # Optional `agent:` section (agentic personas). None = no agent: every
+    # persona uses the plain LLM, tools or not.
+    agent: BackendConfig | None = None
 
 
 def _require_section(data: dict, key: str, path: Path) -> dict:
@@ -184,6 +187,7 @@ def load_config(path: str | Path) -> AppConfig:
         audio=audio,
         mode=mode,
         llm_voice_override=_llm_voice_override(data, path),
+        agent=_backend_config(data, "agent", path) if data.get("agent") is not None else None,
     )
 
 

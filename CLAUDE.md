@@ -59,7 +59,10 @@ design (a one-shot "mic stream ended" signal could be consumed by the
 wrong one of two alternating readers, permanently hanging the next
 listening iteration); see `docs/ARCHITECTURE.md`'s "A real deadlock found
 via the first real, continuous mic round trip" section and
-`Orchestrator._pump_mic`'s docstring. What's *not* done yet:
+`Orchestrator._pump_mic`'s docstring. Personas can also be **agents**:
+a persona that lists `tools:` runs through a LangGraph tool-calling loop
+(see the Architecture bullet below and `docs/ARCHITECTURE.md`'s "Agentic
+personas" section). What's *not* done yet:
 `RollingSummarizer`
 (`companion/memory/summarizer.py`, unimplemented/unwired).
 (`llm.voice_mode_override` used to be listed here too; it's now real:
@@ -185,10 +188,17 @@ but the tests skip themselves if no server is reachable at
 STT/TTS smoke tests, they don't auto-pull one — an LLM is too large to
 fetch automatically in a test).
 
+Agentic personas: `pip install -e ".[dev,agents]"` runs
+`tests/test_agent_langgraph.py` (the real LangGraph loop against a
+scripted fake chat model; its `test_real_qwen_*` test also needs
+`qwen2.5:7b-instruct` pulled and skips otherwise). `tests/test_tools.py`
+needs no extra: the online tools are tested with mocked HTTP and a fake
+`ddgs` module.
+
 For any other backend, install its extra — see `pyproject.toml` for the
 full list of optional-dependency groups (`stt-whisper`, `tts-piper`,
 `tts-coqui`, `llm-ollama`, `vad-silero`, `memory-chroma`, `memory-lancedb`,
-`audio-sounddevice`).
+`audio-sounddevice`, `ui-streamlit`, `agents`, `tools-online`).
 Running the LLM backend also requires a local Ollama server
 (`ollama pull <model>` for whatever `companion/config/config.yaml` names).
 
@@ -324,6 +334,27 @@ place backend selection happens, see below.
   including its testing-reality-check subsection — real device behavior
   is deliberately not something the automated test suite claims to
   verify beyond "the real API runs without erroring."
+- **Agentic personas: `companion/tools/` + `companion/core/agent/` +
+  `companion/backends/agent/`** — a persona's optional `tools:` (names from
+  `companion/tools/registry.py`) makes it an agent. Tools are plain async
+  functions with no LangChain dependency; `companion/core/agent/` defines
+  the `AgentRunner` protocol and event types `Orchestrator` sees;
+  `backends/agent/langgraph_ollama.py` (`LangGraphOllamaAgent`) is the only
+  place LangGraph/LangChain is imported. `Orchestrator(..., agent=None)`:
+  a persona the agent `handles()` goes through it, everything else is
+  unchanged; memory only ever gets the final answer. Config: optional
+  `agent:` section (`app.build_agent`); network tools (`web_search`,
+  `weather`) need `agent.options.allow_network: true` (default false,
+  to keep the offline claim). Needs a tool-calling Ollama model
+  (`qwen2.5:7b-instruct`; `dolphin-llama3` has no tool support). Voice
+  mode: `_sentences_from_agent` reads the agent stream from **one**
+  background task (same single-reader rule as `_pump_mic`), speaks a
+  filler on the first `ToolStarted`, wakes on barge-in during the tool
+  wait and cancels the agent, and falls back to the plain LLM after
+  `agent_voice_timeout_s`. Don't add a second reader of the agent stream.
+  Adding a tool = a `build_*` function + one `TOOL_SPECS` entry + tests in
+  `tests/test_tools.py`; adding it to `scripts/check_offline.py` if it's
+  offline.
 
 ## Build order
 
@@ -404,7 +435,13 @@ without being asked):
     together) by hand.
 11. Write up real numbers in `docs/HARDWARE_REQUIREMENTS.md` (currently a
     draft based on published specs, not measured).
-12. Cloud backend adapters — **do not start until explicitly instructed.**
+12. ~~Agentic personas~~ — done (asked for explicitly, ahead of 11's
+    write-up). Tool registry, LangGraph runner, per-persona tools, two new
+    personas (`study_buddy`, `planner`), reminders delivered in text,
+    Streamlit and voice mode, voice filler + barge-in. See
+    `docs/ARCHITECTURE.md`'s "Agentic personas" section.
+13. Cloud backend adapters — **do not start until explicitly instructed.**
+    The deployed version is a separate project/repo, not this one.
 
 ## Open decisions (don't resolve unilaterally)
 

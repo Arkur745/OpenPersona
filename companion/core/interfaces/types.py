@@ -36,3 +36,10 @@ class Persona:
     boundaries: str
     voice_id: str
     example_dialogue: list[str] = field(default_factory=list)
+    # Names from companion/tools/registry.py. Empty = a plain chat persona
+    # (no agent loop). Names are checked against the registry when the app
+    # is built, not here, so this type stays independent of the tools layer.
+    tools: list[str] = field(default_factory=list)
+    # Short lines spoken in voice mode while a tool call runs. Empty = the
+    # generic defaults in companion/core/agent/.
+    filler_phrases: list[str] = field(default_factory=list)

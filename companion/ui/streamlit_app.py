@@ -49,7 +49,9 @@ import numpy as np
 import streamlit as st
 
 from companion.app import (
+    REMINDER_POLL_S,
     AppSetupError,
+    build_agent,
     build_llm,
     build_memory,
     build_stt,
@@ -57,6 +59,7 @@ from companion.app import (
     build_vad,
     load_personas,
     select_persona,
+    take_due_reminders,
 )
 from companion.config.loader import (
     AppConfig,
@@ -64,6 +67,7 @@ from companion.config.loader import (
     load_config,
     resolve_config_path,
 )
+from companion.core.agent import AgentEvent, ToolFinished, ToolStarted
 from companion.core.interfaces.types import Persona, Turn
 from companion.core.orchestrator import Orchestrator
 from companion.core.persona_loader import PersonaError
@@ -95,11 +99,15 @@ def _shared_backends(_config: AppConfig) -> dict[str, object]:
     # docs/ARCHITECTURE.md's "Persona voice binding" note) — built once
     # and reused across persona switches in the sidebar, so switching
     # personas doesn't reconstruct/reload STT/LLM/VAD/Memory needlessly.
+    memory = build_memory(_config)
     return {
         "stt": build_stt(_config),
         "llm": build_llm(_config),
         "vad": build_vad(_config),
-        "memory": build_memory(_config),
+        "memory": memory,
+        # None without an `agent:` config section; then every persona
+        # chats through the plain LLM.
+        "agent": build_agent(_config, memory),
     }
 
 
@@ -112,6 +120,7 @@ def _build_orchestrator(config: AppConfig, persona: Persona) -> Orchestrator:
         vad=shared["vad"],
         memory=shared["memory"],
         prompt_builder=PromptBuilder(),
+        agent=shared["agent"],
     )
 
 
@@ -184,6 +193,19 @@ def _process_message(
     speak_reply: bool,
 ) -> None:
     with st.chat_message("assistant"):
+        # Tool activity (agentic personas) shows up in a collapsible status
+        # box as it happens; it only appears once a tool is actually used.
+        status_box = None
+
+        def show_agent_event(event: AgentEvent) -> None:
+            nonlocal status_box
+            if isinstance(event, ToolStarted):
+                if status_box is None:
+                    status_box = st.status("Using tools...", expanded=False)
+                status_box.write(f"🔧 {event.name}")
+            elif isinstance(event, ToolFinished) and not event.ok and status_box is not None:
+                status_box.write(f"⚠️ {event.name} reported a problem")
+
         with st.spinner("Thinking..."):
             try:
                 reply = asyncio.run(
@@ -192,8 +214,11 @@ def _process_message(
                         persona=persona,
                         recent_turns=recent_turns,
                         message=message,
+                        on_agent_event=show_agent_event,
                     )
                 )
+                if status_box is not None:
+                    status_box.update(label="Used tools", state="complete")
             except Exception as exc:  # noqa: BLE001 — see below
                 # Same "fail loudly, not silently" posture as every other
                 # entry point in this project (__main__.py's top-level
@@ -284,6 +309,27 @@ orchestrator: Orchestrator = st.session_state["orchestrator"]
 recent_turns: list[Turn] = st.session_state["recent_turns"]
 
 st.title(persona.name)
+if orchestrator.agent is not None and orchestrator.agent.handles(persona):
+    allow_network = bool(config.agent and config.agent.options.get("allow_network", False))
+    from companion.tools.registry import enabled_tool_names
+
+    st.caption("Tools: " + ", ".join(enabled_tool_names(persona, allow_network)))
+
+
+@st.fragment(run_every=REMINDER_POLL_S)
+def _reminders() -> None:
+    # Reruns on its own every REMINDER_POLL_S seconds, so a due reminder
+    # appears without the user typing anything. Each is shown once (as a
+    # toast) and stays listed until the page is reloaded.
+    shown = st.session_state.setdefault("_reminders_shown", [])
+    for line in take_due_reminders(config, user_id, personas):
+        shown.append(line)
+        st.toast(line)
+    for line in shown[-3:]:
+        st.info(line)
+
+
+_reminders()
 
 for turn in recent_turns:
     with st.chat_message(turn.role):

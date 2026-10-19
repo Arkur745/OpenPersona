@@ -22,6 +22,9 @@ Split in two halves, matching what's actually being checked:
 
 from __future__ import annotations
 
+import asyncio
+from unittest.mock import Mock
+
 import pytest
 import yaml
 
@@ -514,3 +517,91 @@ async def test_real_end_to_end_text_conversation_smoke(tmp_path):
     assert reply.strip()
     retrieved = await orchestrator.memory.query("test-user", persona.id, "hear me", k=5)
     assert any("hear me" in t.text.lower() for t in retrieved)
+
+
+# --- agent wiring -------------------------------------------------------------
+
+
+def test_build_agent_is_none_without_an_agent_section():
+    from companion.app import build_agent
+
+    assert build_agent(_config(), memory=Mock()) is None
+
+
+def test_build_agent_constructs_the_langgraph_runner():
+    pytest.importorskip("langgraph")
+    from companion.app import build_agent
+    from companion.backends.agent.langgraph_ollama import LangGraphOllamaAgent
+
+    agent = build_agent(
+        _config(agent=BackendConfig(backend="langgraph", options={"max_steps": 3})), memory=Mock()
+    )
+
+    assert isinstance(agent, LangGraphOllamaAgent)
+    assert agent.max_steps == 3
+
+
+def test_build_agent_rejects_unknown_backend():
+    from companion.app import build_agent
+
+    with pytest.raises(AppSetupError, match="crewai"):
+        build_agent(_config(agent=BackendConfig(backend="crewai", options={})), memory=Mock())
+
+
+def test_load_personas_rejects_unknown_tool_names(tmp_path):
+    from companion.tools.registry import UnknownToolError
+
+    (tmp_path / "p.yaml").write_text(
+        yaml.safe_dump({**VALID_PERSONA_YAML, "tools": ["teleport"]}), encoding="utf-8"
+    )
+
+    with pytest.raises(UnknownToolError, match="teleport"):
+        load_personas(_config(personas_dir=str(tmp_path)))
+
+
+def test_take_due_reminders_names_the_persona_that_set_it(tmp_path):
+    from datetime import datetime, timedelta
+
+    from companion.app import take_due_reminders
+    from companion.tools.store import ToolStore
+
+    now = datetime.now().astimezone()
+    ToolStore(tmp_path).add_reminder("u1", "mentor", "Stretch", now - timedelta(minutes=1), now)
+    config = _config(agent=BackendConfig(backend="langgraph", options={"data_dir": str(tmp_path)}))
+
+    lines = take_due_reminders(config, "u1", {"mentor": _persona()})
+
+    assert lines == ["⏰ Reminder (from The Old Mentor): Stretch"]
+    assert take_due_reminders(config, "u1", {"mentor": _persona()}) == []
+
+
+async def test_text_loop_prints_due_reminders_while_idle_and_tool_use():
+    from companion.core.agent import TextDelta, ToolStarted
+
+    class _Agent:
+        def handles(self, persona):
+            return True
+
+        async def run_stream(self, persona, user_id, built):
+            yield ToolStarted("set_reminder")
+            yield TextDelta("Done.")
+
+    orchestrator = Orchestrator(stt=Mock(), tts=Mock(), llm=Mock(), vad=Mock(),
+                                memory=_FakeMemory(), prompt_builder=PromptBuilder(),
+                                agent=_Agent())
+    printed = []
+    pending = [["⏰ Reminder: Stretch"]]
+    inputs = iter(["remind me", "exit"])
+
+    async def read_input(prompt):
+        await asyncio.sleep(0.05)  # idle long enough for the poller to run
+        return next(inputs)
+
+    await run_text_loop(orchestrator, _persona(), "u1", read_input=read_input,
+                        print_fn=printed.append,
+                        check_reminders=lambda: pending.pop() if pending else [],
+                        reminder_poll_s=0.01)
+
+    assert "\n⏰ Reminder: Stretch\n" in printed
+    assert "  (using set_reminder...)" in printed
+    assert "The Old Mentor> Done.\n" in printed

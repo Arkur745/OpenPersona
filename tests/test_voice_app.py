@@ -204,8 +204,9 @@ class _RecordingOrchestrator:
 
     async def handle_voice_turn(
         self, user_id, persona, mic_audio, *, on_playback_interrupt=None,
-        wait_for_playback_drained=None,
+        wait_for_playback_drained=None, pending_announcements=None,
     ):
+        self.pending_announcements = pending_announcements
         self.call_kwargs = {
             "user_id": user_id,
             "persona": persona,
@@ -313,3 +314,26 @@ async def test_run_voice_session_closes_mic_even_if_playback_construction_fails(
     mic_stream = _FakeStream.instances[0]
     assert mic_stream.stopped is True
     assert mic_stream.closed is True
+
+
+@pytest.mark.asyncio
+async def test_run_voice_loop_speaks_and_prints_due_reminders():
+    orchestrator = _RecordingOrchestrator([])
+    printed = []
+
+    await run_voice_loop(orchestrator, _persona(), "u1", object(), _FakePlayback(),
+                         print_fn=printed.append,
+                         check_reminders=lambda: ["⏰ Reminder (from Planner): Stretch"])
+
+    assert orchestrator.pending_announcements() == ["Reminder (from Planner): Stretch"]
+    assert "⏰ Reminder (from Planner): Stretch" in printed
+
+
+@pytest.mark.asyncio
+async def test_run_voice_loop_without_reminders_passes_no_announcements():
+    orchestrator = _RecordingOrchestrator([])
+
+    await run_voice_loop(orchestrator, _persona(), "u1", object(), _FakePlayback(),
+                         print_fn=lambda _: None)
+
+    assert orchestrator.pending_announcements is None

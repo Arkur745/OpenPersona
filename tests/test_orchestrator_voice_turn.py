@@ -19,7 +19,7 @@ produce.
 
 import asyncio
 import logging
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import pytest
 
@@ -655,3 +655,158 @@ async def test_write_failure_does_not_end_the_session_second_utterance_still_wor
 
     assert len(llm.received_calls) == 2  # both utterances were processed
     assert chunks  # both produced audio
+
+
+# --- Agent path (personas with tools) -----------------------------------------
+# Same fakes as above plus a scripted agent. The agent's stream is read by one
+# background task inside _sentences_from_agent; these tests pin what the user
+# hears (filler, then answer), what reaches memory (answer only), and that
+# barge-in or a stalled agent never leaves the turn hanging.
+
+
+class _FakeAgent:
+    """Replays `steps`: AgentEvents are yielded, numbers are sleeps."""
+
+    def __init__(self, steps) -> None:
+        self.steps = steps
+        self.cancelled = False
+        self.finished = False
+
+    def handles(self, persona: Persona) -> bool:
+        return bool(persona.tools)
+
+    async def run_stream(self, persona, user_id, built):
+        try:
+            for step in self.steps:
+                if isinstance(step, (int, float)):
+                    await asyncio.sleep(step)
+                else:
+                    yield step
+            self.finished = True
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
+def _tool_persona() -> Persona:
+    return Persona(id="planner", name="Planner", tone="Brisk.", boundaries="None.",
+                   voice_id="piper:x", tools=["get_datetime"], filler_phrases=["One sec."])
+
+
+def _agent_orchestrator(agent, *, llm=None, tts=None, memory=None) -> Orchestrator:
+    orchestrator = _make_orchestrator(llm=llm, tts=tts, memory=memory)
+    orchestrator.agent = agent
+    return orchestrator
+
+
+@pytest.mark.asyncio
+async def test_agent_turn_speaks_filler_then_answer_and_remembers_only_the_answer():
+    from companion.core.agent import TextDelta, ToolFinished, ToolStarted
+
+    agent = _FakeAgent([ToolStarted("get_datetime"), 0.02, ToolFinished("get_datetime", True),
+                        TextDelta("It's Monday. "), TextDelta("Anything else?")])
+    tts = _FakeTTS()
+    memory = _FakeMemoryStore()
+    orchestrator = _agent_orchestrator(agent, tts=tts, memory=memory)
+    mic = _mic([SPEECH_FRAME, SILENCE_FRAME], trailing_silence=10, frame_interval=0.01)
+
+    _ = [c async for c in orchestrator.handle_voice_turn("u1", _tool_persona(), mic)]
+
+    assert tts.synthesized_sentences == ["One sec.", "It's Monday.", "Anything else?"]
+    assert [(t.role, t.text) for _, _, t in memory.written] == [
+        ("user", "hello there"), ("assistant", "It's Monday. Anything else?"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_no_filler_when_the_agent_answers_without_tools():
+    from companion.core.agent import TextDelta
+
+    tts = _FakeTTS()
+    orchestrator = _agent_orchestrator(_FakeAgent([TextDelta("Hello! Nice to see you.")]), tts=tts)
+    mic = _mic([SPEECH_FRAME, SILENCE_FRAME], trailing_silence=10, frame_interval=0.01)
+
+    _ = [c async for c in orchestrator.handle_voice_turn("u1", _tool_persona(), mic)]
+
+    assert tts.synthesized_sentences == ["Hello!", "Nice to see you."]
+
+
+@pytest.mark.asyncio
+async def test_barge_in_while_waiting_on_a_tool_cancels_the_agent():
+    """The silent gap after the filler: the consumer is waiting on the
+    agent, not on TTS. Barge-in there must end the turn at once and cancel
+    the agent, so its result can't arrive after the user moved on."""
+    from companion.core.agent import TextDelta, ToolStarted
+
+    agent = _FakeAgent([ToolStarted("get_datetime"), 30, TextDelta("Too late.")])
+    tts = _FakeTTS()
+    memory = _FakeMemoryStore()
+    orchestrator = _agent_orchestrator(agent, tts=tts, memory=memory)
+    mic = _mic([SPEECH_FRAME, SILENCE_FRAME] + [SILENCE_FRAME] * 5 + [SPEECH_FRAME],
+               frame_interval=0.01)
+
+    _ = await asyncio.wait_for(
+        _collect(orchestrator.handle_voice_turn("u1", _tool_persona(), mic)), timeout=5
+    )
+
+    assert agent.cancelled and not agent.finished
+    assert tts.synthesized_sentences == ["One sec."]
+    assert [t.role for _, _, t in memory.written] == ["user"]  # filler isn't remembered
+
+
+@pytest.mark.asyncio
+async def test_stalled_agent_falls_back_to_the_plain_llm():
+    from companion.core.agent import ToolStarted
+    from companion.core.orchestrator.orchestrator import VOICE_AGENT_TIMEOUT_CAVEAT
+
+    agent = _FakeAgent([ToolStarted("get_datetime"), 30])
+    tts = _FakeTTS()
+    memory = _FakeMemoryStore()
+    orchestrator = _agent_orchestrator(agent, tts=tts, memory=memory,
+                                       llm=_FakeLLM(["From what I know, it's Monday."]))
+    orchestrator.agent_voice_timeout_s = 0.05
+    mic = _mic([SPEECH_FRAME, SILENCE_FRAME], trailing_silence=20, frame_interval=0.01)
+
+    _ = await asyncio.wait_for(
+        _collect(orchestrator.handle_voice_turn("u1", _tool_persona(), mic)), timeout=5
+    )
+
+    assert agent.cancelled
+    assert tts.synthesized_sentences == ["One sec.", VOICE_AGENT_TIMEOUT_CAVEAT,
+                                         "From what I know, it's Monday."]
+    assert memory.written[-1][2].text == "From what I know, it's Monday."
+
+
+@pytest.mark.asyncio
+async def test_agent_error_propagates_like_an_llm_error():
+    class _BrokenAgent(_FakeAgent):
+        async def run_stream(self, persona, user_id, built):
+            raise RuntimeError("model not pulled")
+            yield  # pragma: no cover — makes this an async generator
+
+    orchestrator = _agent_orchestrator(_BrokenAgent([]))
+    mic = _mic([SPEECH_FRAME, SILENCE_FRAME], trailing_silence=10, frame_interval=0.01)
+
+    with pytest.raises(RuntimeError, match="model not pulled"):
+        await asyncio.wait_for(
+            _collect(orchestrator.handle_voice_turn("u1", _tool_persona(), mic)), timeout=5
+        )
+
+
+async def _collect(stream) -> list[bytes]:
+    return [chunk async for chunk in stream]
+
+
+@pytest.mark.asyncio
+async def test_pending_announcements_are_spoken_first_but_not_remembered():
+    tts = _FakeTTS()
+    memory = _FakeMemoryStore()
+    orchestrator = _make_orchestrator(tts=tts, memory=memory, llm=_FakeLLM(["Hi."]))
+    pending = [["Reminder: stretch."]]
+    mic = _mic([SPEECH_FRAME, SILENCE_FRAME], trailing_silence=10, frame_interval=0.01)
+
+    _ = [c async for c in orchestrator.handle_voice_turn(
+        "u1", _persona(), mic, pending_announcements=lambda: pending.pop() if pending else [])]
+
+    assert tts.synthesized_sentences == ["Reminder: stretch.", "Hi."]
+    assert memory.written[-1][2].text == "Hi."

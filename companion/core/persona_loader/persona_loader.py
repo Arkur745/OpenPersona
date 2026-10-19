@@ -27,7 +27,8 @@ from companion.core.interfaces.types import Persona
 
 _ID_RE = re.compile(r"^[a-z0-9_-]+$")
 _REQUIRED_STRING_FIELDS = ("id", "name", "tone", "boundaries", "voice_id")
-_KNOWN_FIELDS = set(_REQUIRED_STRING_FIELDS) | {"example_dialogue"}
+_KNOWN_FIELDS = set(_REQUIRED_STRING_FIELDS) | {"example_dialogue", "tools", "filler_phrases"}
+_TOOL_NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 class PersonaError(ValueError):
@@ -86,6 +87,17 @@ def _validate_and_build(data: object, path: Path) -> Persona:
             f"{example_dialogue!r}"
         )
 
+    tools = _string_list(data, "tools", path)
+    bad_names = [name for name in tools if not _TOOL_NAME_RE.match(name)]
+    if bad_names:
+        raise PersonaError(
+            f"{path}: 'tools' entries must be tool names like 'get_datetime' "
+            f"(lowercase letters, digits, '_'), got {bad_names!r}"
+        )
+    duplicates = sorted({name for name in tools if tools.count(name) > 1})
+    if duplicates:
+        raise PersonaError(f"{path}: 'tools' lists {duplicates!r} more than once")
+
     return Persona(
         id=persona_id,
         name=data["name"],
@@ -93,7 +105,21 @@ def _validate_and_build(data: object, path: Path) -> Persona:
         boundaries=data["boundaries"],
         voice_id=voice_id,
         example_dialogue=list(example_dialogue),
+        tools=tools,
+        filler_phrases=_string_list(data, "filler_phrases", path),
     )
+
+
+def _string_list(data: dict, field_name: str, path: Path) -> list[str]:
+    """An optional list of non-empty strings; absent means empty."""
+    value = data.get(field_name, [])
+    if not isinstance(value, list) or not all(
+        isinstance(entry, str) and entry.strip() for entry in value
+    ):
+        raise PersonaError(
+            f"{path}: {field_name!r} must be a list of non-empty strings, got {value!r}"
+        )
+    return [entry.strip() for entry in value]
 
 
 def load_persona(path: str | Path) -> Persona:

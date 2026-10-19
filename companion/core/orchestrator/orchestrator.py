@@ -19,6 +19,13 @@ import logging
 import re
 from typing import AsyncIterator, Awaitable, Callable
 
+from companion.core.agent import (
+    DEFAULT_FILLER_PHRASES,
+    AgentEvent,
+    AgentRunner,
+    TextDelta,
+    ToolStarted,
+)
 from companion.core.interfaces import (
     LLMBackend,
     MemoryStore,
@@ -48,6 +55,28 @@ logger = logging.getLogger(__name__)
 # one. Real NLP sentence segmentation is a possible future upgrade, not
 # needed for streaming TTS to work correctly.
 _SENTENCE_END_RE = re.compile(r'[.!?]+[)"\']?(?:\s+|$)')
+
+VOICE_AGENT_TIMEOUT_CAVEAT = "I couldn't check that just now."
+
+
+async def _as_answer(sentences: AsyncIterator[str]) -> AsyncIterator[tuple[str, bool]]:
+    """Tags plain-LLM sentences as answer text (never filler)."""
+    async for sentence in sentences:
+        yield sentence, False
+
+
+async def _with_announcements(
+    lines: list[str], source: AsyncIterator[tuple[str, bool]]
+) -> AsyncIterator[tuple[str, bool]]:
+    try:
+        for line in lines:
+            yield line, True
+        async for item in source:
+            yield item
+    finally:
+        aclose = getattr(source, "aclose", None)
+        if aclose is not None:
+            await aclose()
 
 
 def _pop_complete_sentence(buffer: str) -> tuple[str | None, str]:
@@ -129,6 +158,8 @@ class Orchestrator:
         vad: VoiceActivityDetector,
         memory: MemoryStore,
         prompt_builder: PromptBuilder,
+        agent: AgentRunner | None = None,
+        agent_voice_timeout_s: float = 20.0,
     ) -> None:
         self.stt = stt
         self.tts = tts
@@ -136,9 +167,23 @@ class Orchestrator:
         self.vad = vad
         self.memory = memory
         self.prompt_builder = prompt_builder
+        # Optional, like handle_voice_turn's playback hooks: None (or a
+        # persona with no tools) means exactly the plain-LLM behaviour
+        # every existing caller and test relies on.
+        self.agent = agent
+        # Voice mode only: if the agent produces nothing for this long, stop
+        # waiting and answer from the plain LLM (see _sentences_from_agent).
+        self.agent_voice_timeout_s = agent_voice_timeout_s
+        self._filler_index = 0
 
     async def handle_text_turn(
-        self, user_id: str, persona: Persona, recent_turns: list[Turn], message: str
+        self,
+        user_id: str,
+        persona: Persona,
+        recent_turns: list[Turn],
+        message: str,
+        *,
+        on_agent_event: Callable[[AgentEvent], None] | None = None,
     ) -> str:
         """Text-mode turn: no STT/VAD/TTS involved, just memory + LLM.
 
@@ -151,6 +196,13 @@ class Orchestrator:
         reply, and persists both sides of the exchange to `MemoryStore`
         before returning — so a later call (or a future session) can
         retrieve this exchange as memory.
+
+        If an `agent` is set and handles this persona (it has tools), the
+        reply comes from the agent's tool-calling loop instead of the plain
+        LLM. Everything around it is identical, and only the final answer
+        is written to memory, never tool calls or tool output (see
+        docs/AGENTIC_TOOLS.md section 3). `on_agent_event` lets a UI show
+        tool activity as it happens.
         """
         retrieved_memory = await self.memory.query(
             user_id, persona.id, message, k=self.prompt_builder.max_memory_turns
@@ -164,9 +216,18 @@ class Orchestrator:
             user_message=message,
         )
 
-        reply = "".join(
-            [token async for token in self.generate_reply(built.prompt, built.context)]
-        )
+        if self.agent is not None and self.agent.handles(persona):
+            parts = []
+            async for event in self.agent.run_stream(persona, user_id, built):
+                if on_agent_event is not None:
+                    on_agent_event(event)
+                if isinstance(event, TextDelta):
+                    parts.append(event.text)
+            reply = "".join(parts)
+        else:
+            reply = "".join(
+                [token async for token in self.generate_reply(built.prompt, built.context)]
+            )
 
         await self._write_turn_safely(
             user_id, persona.id, Turn(role="user", text=message.strip())
@@ -280,6 +341,106 @@ class Orchestrator:
         if remainder:
             yield remainder
 
+    def _next_filler(self, persona: Persona) -> str:
+        phrases = persona.filler_phrases or DEFAULT_FILLER_PHRASES
+        phrase = phrases[self._filler_index % len(phrases)]
+        self._filler_index += 1
+        return phrase
+
+    async def _sentences_from_agent(
+        self,
+        persona: Persona,
+        user_id: str,
+        built: BuiltPrompt,
+        interrupted: asyncio.Event,
+    ) -> AsyncIterator[tuple[str, bool]]:
+        """Voice-mode counterpart of `_sentences_from_llm` for personas with
+        tools. Yields `(sentence, is_filler)`.
+
+        - The agent stream is read by exactly one background task, which
+          forwards events to a private queue. Nothing else touches the
+          agent's async generator, the same single-reader rule
+          `_pump_mic` exists to enforce for the mic.
+        - When the model calls its first tool, a short filler phrase from
+          the persona is yielded immediately (marked `is_filler`), so the
+          user hears something while the tool runs instead of silence.
+        - Waiting also wakes on `interrupted`, so barge-in during the
+          silent wait after a filler ends the turn at once.
+        - If nothing arrives for `agent_voice_timeout_s`, the agent is
+          abandoned: a short caveat (also a filler) is spoken and the plain
+          LLM answers instead.
+        - Closing this generator (the caller leaving its loop on barge-in)
+          cancels the agent task, so a tool result can never arrive after
+          the user has moved on.
+        """
+        done = object()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def read_agent() -> None:
+            stream = self.agent.run_stream(persona, user_id, built)
+            try:
+                async for event in stream:
+                    await queue.put(event)
+                await queue.put(done)
+            except Exception as exc:  # noqa: BLE001 — handed to the consumer, raised there
+                await queue.put(exc)
+            finally:
+                aclose = getattr(stream, "aclose", None)
+                if aclose is not None:
+                    await aclose()
+
+        reader = asyncio.create_task(read_agent())
+        interrupt_wait = asyncio.create_task(interrupted.wait())
+        buffer = ""
+        spoke_filler = spoke_answer = False
+        try:
+            while True:
+                get = asyncio.create_task(queue.get())
+                finished, _ = await asyncio.wait(
+                    {get, interrupt_wait}, timeout=self.agent_voice_timeout_s,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if get not in finished:
+                    get.cancel()
+                    if interrupt_wait in finished:
+                        return
+                    logger.warning(
+                        "agent produced nothing for %.0fs; answering without tools",
+                        self.agent_voice_timeout_s,
+                    )
+                    reader.cancel()
+                    yield VOICE_AGENT_TIMEOUT_CAVEAT, True
+                    async for sentence in self._sentences_from_llm(built.prompt, built.context):
+                        yield sentence, False
+                    return
+                item = get.result()
+                if item is done:
+                    break
+                if isinstance(item, Exception):
+                    raise item
+                if isinstance(item, ToolStarted) and not spoke_filler and not spoke_answer:
+                    spoke_filler = True
+                    yield self._next_filler(persona), True
+                elif isinstance(item, TextDelta):
+                    buffer += item.text
+                    while True:
+                        sentence, buffer = _pop_complete_sentence(buffer)
+                        if sentence is None:
+                            break
+                        if sentence:
+                            spoke_answer = True
+                            yield sentence, False
+            remainder = buffer.strip()
+            if remainder:
+                yield remainder, False
+        finally:
+            for task in (reader, interrupt_wait):
+                task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reader
+            with contextlib.suppress(asyncio.CancelledError):
+                await interrupt_wait
+
     async def _pump_mic(
         self,
         mic_audio: AsyncIterator[bytes],
@@ -348,6 +509,7 @@ class Orchestrator:
         *,
         on_playback_interrupt: Callable[[], None] | None = None,
         wait_for_playback_drained: Callable[[], Awaitable[None]] | None = None,
+        pending_announcements: Callable[[], list[str]] | None = None,
     ) -> AsyncIterator[bytes]:
         """Run a full voice conversation session: listen, respond, repeat,
         until `mic_audio` ends. Yields TTS playback audio chunks.
@@ -427,6 +589,17 @@ class Orchestrator:
         `companion/audio/playback.py`'s `SpeakerPlayback` for the real
         implementation these two hooks are designed to drive, including
         the honest precision caveat on what "drained" actually means.
+
+        `pending_announcements` (optional) is called once per response,
+        before it starts; any lines it returns (e.g. due reminders) are
+        spoken first. Like filler phrases, they're heard but not written
+        to memory as something the persona said.
+
+        Personas with tools go through `self.agent` instead of the plain
+        LLM (see `_sentences_from_agent`): a filler phrase is spoken when
+        the first tool is called, barge-in during the wait cancels the
+        agent, and a stalled agent falls back to the plain LLM after
+        `agent_voice_timeout_s`.
         """
         frame_bytes = getattr(self.vad, "frame_bytes", None)
         if not isinstance(frame_bytes, int):
@@ -512,19 +685,30 @@ class Orchestrator:
                             return
 
                 watcher = asyncio.create_task(watch_for_barge_in())
+                if self.agent is not None and self.agent.handles(persona):
+                    source = self._sentences_from_agent(persona, user_id, built, interrupted)
+                else:
+                    source = _as_answer(self._sentences_from_llm(built.prompt, built.context))
+                if pending_announcements is not None:
+                    # e.g. due reminders: spoken first, like fillers (heard,
+                    # not remembered as something the persona said).
+                    source = _with_announcements(pending_announcements(), source)
                 try:
-                    async for sentence in self._sentences_from_llm(
-                        built.prompt, built.context
-                    ):
-                        response_sentences.append(sentence)
-                        if interrupted.is_set():
-                            break
-                        async for audio_chunk in self.tts.synthesize_stream(sentence):
+                    # aclosing: leaving the loop early (barge-in) must close
+                    # the source right away, which for the agent path is what
+                    # cancels the in-flight agent task.
+                    async with contextlib.aclosing(source) as sentences:
+                        async for sentence, is_filler in sentences:
+                            if not is_filler:  # fillers are spoken, never remembered
+                                response_sentences.append(sentence)
                             if interrupted.is_set():
                                 break
-                            yield audio_chunk
-                        if interrupted.is_set():
-                            break
+                            async for audio_chunk in self.tts.synthesize_stream(sentence):
+                                if interrupted.is_set():
+                                    break
+                                yield audio_chunk
+                            if interrupted.is_set():
+                                break
 
                     if wait_for_playback_drained is not None and not interrupted.is_set():
                         # Keep the watcher alive through the real playback

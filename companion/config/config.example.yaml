@@ -97,6 +97,26 @@ llm:
     options:
       model: qwen2.5:3b-instruct
 
+# --- Agentic personas -----------------------------------------------------
+# Personas that list `tools:` (see companion/personas/schema.md) run as
+# agents: a LangGraph tool-calling loop (companion/backends/agent/) decides
+# when to use their tools. Personas without tools, or any persona when this
+# section is removed, use the plain `llm` above.
+#
+# Needs: pip install -e ".[agents]"   (+ ".[tools-online]" for network tools)
+# The model must support tool calling (`ollama show <model>` lists "tools"
+# under Capabilities); dolphin-llama3, for example, does not.
+agent:
+  backend: langgraph
+  options:
+    model: qwen2.5:7b-instruct
+    host: http://localhost:11434
+    temperature: 0.3                 # lower than chat: tool arguments need precision
+    max_steps: 6                     # model calls + tool rounds per turn before giving up
+    tool_timeout_s: 10               # per tool call; a timeout goes back to the model as an error
+    allow_network: false             # true enables web_search and weather (off = fully offline)
+    data_dir: ./data/tools           # notes and reminders (SQLite)
+
 # --- Voice activity detection ---------------------------------------------
 # See companion/backends/vad/silero_vad.py's module docstring: Silero's
 # model requires exactly 512 samples/frame at 16kHz (256 at 8kHz) — a hard

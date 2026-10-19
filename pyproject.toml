@@ -78,6 +78,14 @@ audio-sounddevice = ["sounddevice>=0.4"]
 # local-first-friendly way to get a real chat window running, not a
 # final/only answer for every future UI need.
 ui-streamlit = ["streamlit>=1.30"]
+# Agentic personas (companion/backends/agent/, docs/AGENTIC_TOOLS.md): the
+# LangGraph agent loop and its Ollama chat model. No torch. Personas
+# without `tools:` never touch these.
+agents = ["langgraph>=1.0", "langchain>=1.0", "langchain-ollama>=1.0"]
+# Network tools (web_search, weather), off unless agent.options
+# .allow_network is true. ddgs = DuckDuckGo search, no API key; weather
+# uses Open-Meteo over httpx, also keyless.
+tools-online = ["ddgs>=9.0", "httpx>=0.27"]
 # `ollama` (+ its own httpx/pydantic deps) is here, not only in llm-ollama,
 # so OllamaLLM's offline/mocked tests can construct real ResponseError /
 # httpx.TransportError instances to test error-path handling without a

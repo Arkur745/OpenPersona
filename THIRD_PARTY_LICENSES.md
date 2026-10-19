@@ -28,6 +28,15 @@ model repos can and do change.
 | **Whatever LLM Ollama serves** (Llama, Qwen, Mistral, ...) | **Entirely dependent on which model you `ollama pull`** | Not something this project can pin once and forget — e.g. Meta's Llama models ship under the Llama Community License (source-available with acceptable-use restrictions, not OSI-approved), while Qwen2.5 is mostly Apache-2.0 with some larger variants under a separate Qwen license. Whoever configures `llm.options.model` in `config.yaml` is responsible for knowing that model's license and whether it fits their use case — this project doesn't ship a default model weight, only a default *config value* naming one. |
 | **MemEngine / MemArk** (vendored source, `companion/memark/_vendor/engine/`) | MIT | https://github.com/Arkur745/MemEngine — not installed via pip; specific files (graph manager, activation engine, FAISS store, and their direct dependencies) are copied verbatim into this repo at a pinned commit, to avoid the whole package's own unconditional dependency list (torch, neo4j, qdrant-client, google-generativeai, groq, streamlit), none of which this project's adapter uses. See `companion/memark/_vendor/PROVENANCE.md` for the exact commit, file list, and reasoning, and `companion/memark/_vendor/LICENSE_MEMENGINE` for the license text copied verbatim from the source repo. |
 
+## Agentic personas (tools)
+
+| Component | License / terms | Notes |
+|---|---|---|
+| **Qwen2.5-7B-Instruct** (default `agent.options.model`) | Apache-2.0 | Same caveat as the LLM row above: this project names the model in config, it doesn't ship the weights. Some *larger* Qwen2.5 sizes use a separate Qwen license; the 7B doesn't. |
+| `langgraph`, `langchain`, `langchain-core`, `langchain-ollama` (`agents` extra) | MIT | Libraries only; no model weights. |
+| `ddgs` (`tools-online` extra, `web_search` tool) | MIT (the package) | Queries DuckDuckGo's public endpoints, which have no official API terms and may rate-limit. Off by default (`agent.options.allow_network: false`). |
+| Open-Meteo (`weather` tool) | Free for non-commercial use; data CC BY 4.0 | No API key. Commercial use needs Open-Meteo's paid plan; attribution is required where the data is shown. Off by default, same flag as above. |
+
 ## On `coqui-tts` vs. the original `TTS` package
 
 Coqui the company shut down in January 2024, and the original

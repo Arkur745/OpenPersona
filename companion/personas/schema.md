@@ -19,6 +19,8 @@ boundaries: >
 voice_id: piper:en_US-mentor-medium   # "<tts-backend>:<voice model id>" —
                                        # resolved against whichever TTS
                                        # backend config.yaml selects
+tools: [recall_memory, notes, reminders, get_datetime]   # optional
+filler_phrases: ["Let me look.", "One moment."]           # optional
 example_dialogue:
   - |
     User: I think I made the wrong call leaving that job.
@@ -60,6 +62,21 @@ example_dialogue:
   lines) and illustrative of *tone*, not a script to be replayed. These are
   folded into the prompt by `PromptBuilder`, so keep the total token count
   reasonable (a handful of short exchanges, not a transcript dump).
+- **`tools`** (optional) makes the persona an agent: a list of tool names
+  from `companion/tools/registry.py` (`get_datetime`, `calculator`,
+  `notes`, `reminders`, `recall_memory`, `web_search`, `weather`). The
+  loader checks the shape (lowercase names, no duplicates); the app checks
+  the names exist when it starts and names the persona if one doesn't.
+  Tools only run when config.yaml has an `agent:` section; without it, or
+  with `tools` empty, the persona chats through the plain LLM. Network
+  tools (`web_search`, `weather`) are skipped unless
+  `agent.options.allow_network` is true, so the same file works offline.
+  Notes are private to the persona; reminders belong to the user, and any
+  persona delivers a due one.
+- **`filler_phrases`** (optional): short lines spoken in voice mode while a
+  tool runs, so the user doesn't sit in silence. Written in the persona's
+  voice; defaults to generic ones ("One moment.") if empty. Never stored in
+  memory.
 - Community-contributed personas should need nothing beyond a new YAML file
   here (plus a voice model file if using a non-stock voice) — no code
   changes. If adding a persona ever requires touching Python, that's a gap

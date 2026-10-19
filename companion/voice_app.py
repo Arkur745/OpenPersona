@@ -102,6 +102,7 @@ async def run_voice_loop(
     playback: SpeakerPlayback,
     *,
     print_fn: Callable[[str], None] = print,
+    check_reminders: Callable[[], list[str]] | None = None,
 ) -> None:
     """Drives one live voice session: real mic audio in, through
     `Orchestrator.handle_voice_turn`, real speaker playback out —
@@ -127,12 +128,22 @@ async def run_voice_loop(
     instead.
     """
     print_fn(f"Talking to {persona.name} ({persona.id}). Press Ctrl+C to quit.\n")
+
+    def announcements() -> list[str]:
+        # Due reminders: printed, and spoken before the next reply.
+        lines = check_reminders()
+        for line in lines:
+            print_fn(line)
+        return [line.removeprefix("⏰ ") for line in lines]
+
+    extra = {"pending_announcements": announcements} if check_reminders else {}
     async for chunk in orchestrator.handle_voice_turn(
         user_id,
         persona,
         mic,
         on_playback_interrupt=playback.stop,
         wait_for_playback_drained=playback.wait_drained,
+        **extra,
     ):
         await playback.play(chunk)
 
@@ -144,6 +155,7 @@ async def run_voice_session(
     user_id: str,
     *,
     print_fn: Callable[[str], None] = print,
+    check_reminders: Callable[[], list[str]] | None = None,
 ) -> None:
     """Top-level voice-mode entrypoint: construct real mic/speaker I/O
     from config, run the session, and guarantee both devices are closed
@@ -153,7 +165,8 @@ async def run_voice_session(
     playback: SpeakerPlayback | None = None
     try:
         playback = build_speaker_playback(config)
-        await run_voice_loop(orchestrator, persona, user_id, mic, playback, print_fn=print_fn)
+        await run_voice_loop(orchestrator, persona, user_id, mic, playback, print_fn=print_fn,
+                             check_reminders=check_reminders)
     finally:
         mic.close()
         if playback is not None:

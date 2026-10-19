@@ -125,7 +125,10 @@ Both `handle_text_turn` and `handle_voice_turn` run the full pipeline
 end-to-end for real, memory included. App bootstrap is done for *both*
 modes — `python -m companion` is a real, runnable conversation loop in
 text or voice mode (see "App bootstrap" and "Voice mode audio I/O"
-below). What's left: cloud adapters, a later, separate phase.
+below). Agentic personas (personas with tools, run through a LangGraph
+agent loop) are implemented too; see "Agentic personas" below. The
+deployed, cloud-hosted version is a separate project, not a phase of this
+repo.
 
 ## STT (implemented)
 
@@ -781,6 +784,101 @@ Split honestly, not blurred:
   either way: this was run and inspected programmatically (chunk counts,
   byte lengths, real-time write duration, memory contents), not confirmed
   by a human listening — nothing in this project has ears.
+
+## Agentic personas (implemented)
+
+A persona that lists `tools:` (companion/personas/schema.md) runs as an
+agent: on each turn a tool-calling loop decides whether to use its tools.
+Design note, including the reasoning this follows: `docs/AGENTIC_TOOLS.md`.
+
+**Pieces, by layer:**
+- `companion/tools/`: the tools, as plain async functions with no
+  LangChain dependency (`base.py`'s `Tool`/`ToolContext`). `registry.py`
+  maps each persona-facing name to a group of small tools, e.g. `notes` ->
+  `add_note`/`search_notes`/`delete_note`; 7B models call several
+  single-purpose tools more reliably than one tool with modes. Offline:
+  `get_datetime`, `calculator` (AST-based, no `eval`, capped exponents),
+  `notes`, `reminders`, `recall_memory`. Online, only with
+  `agent.options.allow_network: true`: `web_search` (ddgs) and `weather`
+  (Open-Meteo); both need no API key.
+- `companion/tools/store.py`: notes and reminders in one SQLite file
+  (`<agent data_dir>/tools.sqlite3`). Notes are scoped per (user,
+  persona), like memory. Reminders are scoped per user: any persona
+  delivers a due one, and it says which persona set it.
+- `companion/core/agent/`: the `AgentRunner` protocol `Orchestrator`
+  depends on, plus the event types (`TextDelta`, `ToolStarted`,
+  `ToolFinished`). A `typing.Protocol`, not a sixth abstract interface,
+  for the reason AGENTIC_TOOLS.md §1 gives.
+- `companion/backends/agent/langgraph_ollama.py`: the one implementation,
+  `LangGraphOllamaAgent`, on `langchain.agents.create_agent` (LangGraph
+  1.x deprecates `create_react_agent` in its favour) with `ChatOllama`.
+  Tool failures (bad arguments, timeouts, crashes) go back to the model
+  as an "Error: ..." result instead of failing the turn; `max_steps`
+  bounds the loop and ends in an apology, not an exception.
+- `companion/app.py`: `build_agent` (from config's optional `agent:`
+  section), tool-name validation in `load_personas` (an unknown name fails
+  at startup, naming the persona), and `take_due_reminders`.
+
+**Orchestrator.** One optional constructor argument, `agent`. A persona
+the agent `handles()` (at least one tool enabled under this config) goes
+through it; every other persona, and every persona when there's no
+`agent:` section, behaves exactly as before. The agent gets exactly
+`PromptBuilder`'s output, so persona, memory and recent turns reach it the
+same way they reach the plain LLM, and PromptBuilder stays the only place
+prompts are assembled. Memory receives the user message and the final
+answer only, never tool calls or tool output.
+
+**Voice mode** (`_sentences_from_agent`):
+- The agent stream is read by one background task into a private queue,
+  so no async generator is shared between readers. That's the rule the
+  `_pump_mic` deadlock section above is about.
+- The filler phrase is spoken when the model actually calls its first
+  tool (`ToolStarted`), not guessed in advance by a keyword heuristic.
+- The wait also wakes on barge-in, so interrupting during the silent gap
+  after the filler ends the turn at once; closing the sentence source
+  (`contextlib.aclosing`) cancels the agent task, so a late tool result
+  can't arrive after the user moved on.
+- If the agent produces nothing for `agent_voice_timeout_s` (default
+  20 s), a short caveat is spoken and the plain LLM answers instead.
+- Fillers, the caveat and announcements (due reminders, spoken before the
+  next reply via `handle_voice_turn`'s `pending_announcements` hook) are
+  spoken but never written to memory.
+
+**Reminder delivery.** Text CLI: a background task polls every 20 s, so a
+reminder appears even while you sit at the prompt. Streamlit: an
+`st.fragment(run_every=20)` shows it as a toast. Voice: printed, and
+spoken before the next reply. Each reminder is delivered exactly once
+(`take_due_reminders` selects and marks delivered in one transaction).
+
+**Model.** Needs Ollama tool-calling support (`ollama show <model>` lists
+"tools"). Default `qwen2.5:7b-instruct`. `dolphin-llama3:8b` has no tool
+support. `qwen2.5-coder:7b` does in principle, but in the spike below it
+wrote its tool calls as plain JSON text and called a tool even for an
+advice question, so it isn't recommended.
+
+**Streaming with tools bound (the AGENTIC_TOOLS.md §1 question).**
+Measured before building on it (2026-10-19; LangGraph 1.2, langchain-ollama
+1.1, Ollama 0.24, `qwen2.5:7b-instruct`): with tools bound, answer tokens
+still stream one by one (48 chunks over ~0.8 s for a no-tool answer). A
+tool call arrives as a single chunk with no text, at ~0.4–0.9 s. The
+streaming bug AGENTIC_TOOLS.md §1 cites (langgraph#5249) didn't reproduce
+here, so the keyword pre-filter designed there isn't used: for a persona
+with tools, the model decides on every turn whether to call one. If a
+future model or library version brings that bug back, the pre-filter in
+§1 is the fallback.
+
+**Tests.**
+- `tests/test_tools.py`: every tool, with a fixed clock, temporary SQLite
+  and mocked HTTP.
+- `tests/test_agent_langgraph.py`: the real LangGraph loop with a
+  scripted fake chat model, plus a real-qwen smoke test that skips
+  without the model.
+- `tests/test_orchestrator_text_turn.py` / `test_orchestrator_voice_turn.py`:
+  routing, memory contents, filler, barge-in during the tool wait, the
+  stall fallback, error propagation, announcements.
+- `tests/test_app.py`, `tests/test_streamlit_app.py`,
+  `tests/test_voice_app.py`: wiring and reminder delivery.
+- `scripts/check_offline.py`: one real tool call under the network guard.
 
 ## Open decisions
 

@@ -35,11 +35,11 @@ def _write_persona(directory: Path, filename: str, data: dict) -> Path:
 # --- Happy path, against the real starter personas -------------------------
 
 
-def test_loads_all_three_starter_personas():
+def test_loads_all_starter_personas():
     loader = PersonaLoader(REAL_PERSONAS_DIR)
     personas = loader.load_all()
 
-    assert set(personas) == {"mentor", "friend", "companion"}
+    assert set(personas) == {"mentor", "friend", "companion", "study_buddy", "planner"}
     for persona_id, persona in personas.items():
         assert isinstance(persona, Persona)
         assert persona.id == persona_id
@@ -184,3 +184,44 @@ def test_duplicate_id_across_files_rejected(tmp_path):
 
     with pytest.raises(PersonaError, match="duplicate persona id"):
         loader.load_all()
+
+
+# --- tools / filler_phrases (agentic personas) -------------------------------
+
+
+def test_tools_and_filler_phrases_are_loaded(tmp_path):
+    data = {**VALID_PERSONA, "tools": ["get_datetime", "notes"],
+            "filler_phrases": ["  One moment.  ", "Let me check."]}
+    persona = load_persona(_write_persona(tmp_path, "p.yaml", data))
+
+    assert persona.tools == ["get_datetime", "notes"]
+    assert persona.filler_phrases == ["One moment.", "Let me check."]
+
+
+def test_tools_and_filler_phrases_default_to_empty(tmp_path):
+    persona = load_persona(_write_persona(tmp_path, "p.yaml", VALID_PERSONA))
+
+    assert persona.tools == []
+    assert persona.filler_phrases == []
+
+
+@pytest.mark.parametrize("tools", ["notes", [1], [""], ["Notes"], ["web-search"]])
+def test_malformed_tools_rejected(tmp_path, tools):
+    path = _write_persona(tmp_path, "p.yaml", {**VALID_PERSONA, "tools": tools})
+
+    with pytest.raises(PersonaError, match="tools"):
+        load_persona(path)
+
+
+def test_duplicate_tool_names_rejected(tmp_path):
+    path = _write_persona(tmp_path, "p.yaml", {**VALID_PERSONA, "tools": ["notes", "notes"]})
+
+    with pytest.raises(PersonaError, match="more than once"):
+        load_persona(path)
+
+
+def test_filler_phrases_must_be_non_empty_strings(tmp_path):
+    path = _write_persona(tmp_path, "p.yaml", {**VALID_PERSONA, "filler_phrases": ["ok", "  "]})
+
+    with pytest.raises(PersonaError, match="filler_phrases"):
+        load_persona(path)

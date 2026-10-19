@@ -199,3 +199,19 @@ def test_real_app_recalls_previous_session_after_restart(backend, tmp_path):
     replies = [line.split("Tester>", 1)[1] for line in second.stdout.splitlines()
                if "Tester>" in line]
     assert replies and "lisbon" in replies[0].lower(), second.stdout
+
+
+# --- agent tools: notes ----------------------------------------------------
+
+
+def test_note_saved_in_one_process_is_found_in_the_next(tmp_path):
+    saved = _child("add-note", "chroma", tmp_path, persona="mentor",
+                   message="Learn Rust this winter")["result"]
+    assert saved == "Saved note #1: Learn Rust this winter"
+
+    found = _child("search-notes", "chroma", tmp_path, persona="mentor", query="rust")["result"]
+    other_persona = _child("search-notes", "chroma", tmp_path, persona="planner",
+                           query="rust")["result"]
+
+    assert "Learn Rust this winter" in found
+    assert other_persona == "No matching notes."

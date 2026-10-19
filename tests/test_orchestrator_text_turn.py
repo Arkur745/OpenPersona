@@ -242,3 +242,74 @@ async def test_memory_query_uses_prompt_builders_max_memory_turns_as_k():
     )
 
     assert memory.query_calls[0][3] == 2
+
+
+# --- Agent path (personas with tools) ----------------------------------------
+
+
+class _FakeAgent:
+    """Stands in for LangGraphOllamaAgent: handles personas that list
+    tools, and replays a scripted event sequence."""
+
+    def __init__(self, events):
+        self.events = events
+        self.calls = []
+
+    def handles(self, persona):
+        return bool(persona.tools)
+
+    async def run_stream(self, persona, user_id, built):
+        self.calls.append((persona.id, user_id, built))
+        for event in self.events:
+            yield event
+
+
+def _tool_persona() -> Persona:
+    return Persona(id="planner", name="Planner", tone="Brisk.", boundaries="None.",
+                   voice_id="piper:x", tools=["reminders"])
+
+
+@pytest.mark.asyncio
+async def test_persona_with_tools_goes_through_the_agent_and_memory_gets_only_the_answer():
+    from companion.core.agent import TextDelta, ToolFinished, ToolStarted
+
+    memory = _FakeMemoryStore()
+    llm = _FakeLLM(["should not be used"])
+    agent = _FakeAgent([ToolStarted("set_reminder"), ToolFinished("set_reminder", True),
+                        TextDelta("Done, "), TextDelta("I'll remind you at 9.")])
+    orchestrator = _make_orchestrator(llm=llm, memory=memory)
+    orchestrator.agent = agent
+    seen = []
+
+    reply = await orchestrator.handle_text_turn(
+        user_id="u1", persona=_tool_persona(), recent_turns=[],
+        message="Remind me to call mom at 9", on_agent_event=seen.append,
+    )
+
+    assert reply == "Done, I'll remind you at 9."
+    assert llm.received_calls == []
+    persona_id, user_id, built = agent.calls[0]
+    assert (persona_id, user_id) == ("planner", "u1")
+    assert built.context[-1].text == "Remind me to call mom at 9"
+    assert [type(e).__name__ for e in seen] == ["ToolStarted", "ToolFinished", "TextDelta",
+                                                "TextDelta"]
+    assert [(t.role, t.text) for _, _, t in memory.written] == [
+        ("user", "Remind me to call mom at 9"),
+        ("assistant", "Done, I'll remind you at 9."),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_persona_without_tools_keeps_the_plain_llm_path_even_with_an_agent():
+    llm = _FakeLLM(["Sure, ", "happy to help."])
+    agent = _FakeAgent([])
+    orchestrator = _make_orchestrator(llm=llm)
+    orchestrator.agent = agent
+
+    reply = await orchestrator.handle_text_turn(
+        user_id="u1", persona=_persona(), recent_turns=[], message="Hi"
+    )
+
+    assert reply == "Sure, happy to help."
+    assert agent.calls == []
+    assert len(llm.received_calls) == 1

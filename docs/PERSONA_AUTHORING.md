@@ -31,7 +31,20 @@ Personas are data, not code. Adding one should never require touching
      speaker's explicit consent** — this applies to community
      contributions too; do not submit a persona bound to a cloned voice
      unless you have the right to use that voice.
-7. If the persona is meant for adult-only content boundaries (see
+7. Optionally give it tools, which makes it an agent (needs the config's
+   `agent:` section and a tool-calling model; see
+   `companion/personas/schema.md`):
+   - `tools:` lists names from `companion/tools/registry.py`:
+     `get_datetime`, `calculator`, `notes`, `reminders`,
+     `recall_memory`, and the network tools `web_search` and `weather`,
+     which only run when `agent.options.allow_network` is true.
+   - Pick tools that fit the persona, not all of them. Each extra tool
+     is one more thing a 7B model can call at the wrong moment.
+   - `filler_phrases:` are short lines spoken in voice mode while a tool
+     runs ("Let me check."). Write them in the persona's voice.
+   - A new tool, as opposed to a new persona, *is* a code change: a
+     `build_*` function in `companion/tools/` plus one registry entry.
+8. If the persona is meant for adult-only content boundaries (see
    `companion.yaml` for the pattern), say so explicitly in `boundaries` —
    age-gating itself is enforced outside the persona file, but the
    persona should never assume it's unnecessary.

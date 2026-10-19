@@ -3,8 +3,11 @@
 An open-source, local-first AI companion. (The Python package and CLI
 are named `companion` — `python -m companion`.) Talk (voice or text) with a
 persona of your choice — a wise old mentor, a casual friend, a romantic
-companion, or one the community writes — running on local models by
-default, with no external server required to get started.
+companion, a study buddy, a planner, or one the community writes — running
+on local models by default, with no external server required to get
+started. Personas can be **agents**: each has its own set of tools (notes,
+reminders, a calculator, memory search, and optionally web search and
+weather) and decides for itself when to use them.
 
 **Status: both text and voice mode run end-to-end, for real.** STT, TTS,
 LLM, VAD, the persona loader, `MemoryStore`, and real mic/speaker audio
@@ -23,6 +26,7 @@ root `CLAUDE.md` for exactly what's implemented vs. not.
 - TTS: [Piper](https://github.com/rhasspy/piper) (optional higher-fidelity: [Coqui/XTTS-v2](https://github.com/idiap/coqui-ai-TTS), incl. future voice cloning)
 - VAD: [Silero VAD](https://github.com/snakers4/silero-vad)
 - Memory: [Chroma](https://www.trychroma.com/) (embedded, no external DB server; LanceDB named as a future alternative, not yet implemented) — an experimental MemArk graph-memory backend is also wired in, see "Memory backend" below
+- Agents: [LangGraph](https://github.com/langchain-ai/langgraph) tool-calling loop over Ollama (`qwen2.5:7b-instruct` by default), see "Agentic personas" below
 
 A deployed, cloud-hosted version is planned as a **separate project**,
 not part of this repo — nothing here talks to a cloud service. See
@@ -69,6 +73,40 @@ instead of a one-line error message).
 If something's wrong — Ollama isn't running, the configured model isn't
 pulled, a persona file is malformed — you'll get a clear one-line error
 telling you what to fix, not a raw traceback (unless you pass `--debug`).
+
+### Agentic personas (tools)
+
+| Persona | id | Tools |
+|---|---|---|
+| The Old Mentor | `mentor` | recall_memory, notes, reminders, get_datetime |
+| Casual Friend | `friend` | recall_memory, get_datetime, weather*, web_search* |
+| Romantic Companion | `companion` | recall_memory, reminders, get_datetime |
+| Study Buddy | `study_buddy` | calculator, notes, recall_memory, web_search* |
+| The Planner | `planner` | reminders, notes, get_datetime, calculator, weather* |
+
+\* network tools: off unless you set `agent.options.allow_network: true`.
+
+Things to try: ask the Planner to "remind me to stretch in 2 minutes",
+the Study Buddy "what's 17% of 2,340?", or tell the Mentor to note
+something, then restart and ask what notes you have. In the terminal a
+"(using ...)" line shows when a tool runs; in Streamlit a "Used tools"
+box does. In voice mode the persona says a short filler line ("Let me
+check.") while a tool runs, and you can interrupt at any point.
+
+Setup:
+
+```
+pip install -e ".[dev,memory-chroma,agents]"   # + tools-online for web_search/weather
+ollama pull qwen2.5:7b-instruct                # needs a model with tool support
+```
+
+`config.example.yaml` already has the `agent:` section; copy it into your
+`config.yaml` if yours predates it. Without that section, every persona
+chats through the plain `llm` model and ignores its tools. Plain chat can
+stay on any model (even one without tool support); only personas with
+tools use the agent model. Notes and reminders live in `data/tools/`. See
+`docs/ARCHITECTURE.md`'s "Agentic personas" section for how it works and
+`companion/personas/schema.md` to give your own persona tools.
 
 ### Streamlit UI (optional, instead of the terminal)
 

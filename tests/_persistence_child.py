@@ -82,6 +82,22 @@ async def _run(args: argparse.Namespace) -> dict:
     if args.command == "delete":
         await store.delete(args.user, args.persona)
         return {"deleted": True}
+    if args.command in ("add-note", "search-notes"):
+        # The notes tool, built the way the agent builds it, against a
+        # tools data dir inside persist_dir.
+        from pathlib import Path
+
+        from companion.tools.base import ToolContext
+        from companion.tools.registry import build_persona_tools
+
+        persona = Persona(id=args.persona, name="P", tone="t", boundaries="b",
+                          voice_id="piper:unused", tools=["notes"])
+        ctx = ToolContext(user_id=args.user, persona_id=args.persona, memory=store,
+                          data_dir=Path(args.persist_dir) / "tools")
+        tools = {t.name: t.func for t in build_persona_tools(persona, ctx, allow_network=False)}
+        if args.command == "add-note":
+            return {"result": await tools["add_note"](text=args.message)}
+        return {"result": await tools["search_notes"](query=args.query)}
     if args.command == "chat":
         llm = _RecordingLLM()
         orchestrator = Orchestrator(
@@ -116,7 +132,8 @@ async def _run(args: argparse.Namespace) -> dict:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["write", "query", "delete", "chat"])
+    parser.add_argument("command",
+                        choices=["write", "query", "delete", "chat", "add-note", "search-notes"])
     parser.add_argument("--backend", required=True, choices=["chroma", "memark"])
     parser.add_argument("--persist-dir", required=True)
     parser.add_argument("--user", default="u1")

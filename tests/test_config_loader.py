@@ -253,3 +253,26 @@ def test_resolve_falls_back_to_example_when_no_user_config(tmp_path):
     example.write_text("placeholder", encoding="utf-8")
 
     assert resolve_config_path(None, base_dir=tmp_path) == example
+
+
+# --- agent section ----------------------------------------------------------
+
+
+def test_agent_section_is_optional(tmp_path):
+    assert load_config(_write_config(tmp_path, VALID_CONFIG)).agent is None
+
+
+def test_agent_section_is_parsed(tmp_path):
+    data = {**VALID_CONFIG, "agent": {"backend": "langgraph", "options": {"max_steps": 3}}}
+
+    agent = load_config(_write_config(tmp_path, data)).agent
+
+    assert (agent.backend, agent.options) == ("langgraph", {"max_steps": 3})
+
+
+def test_real_config_example_enables_the_agent_offline():
+    agent = load_config(REAL_CONFIG_EXAMPLE).agent
+
+    assert agent.backend == "langgraph"
+    assert agent.options["model"] == "qwen2.5:7b-instruct"
+    assert agent.options["allow_network"] is False

@@ -52,15 +52,35 @@ class _FakeMemory(MemoryStore):
 
 @pytest.fixture
 def fake_backends(monkeypatch):
-    import companion.app as app
+    import streamlit as st
 
+    from companion import app
+
+    # The script caches backends with st.cache_resource, which outlives one
+    # AppTest run in the same process.
+    st.cache_resource.clear()
     memory = _FakeMemory()
     monkeypatch.setattr(app, "build_stt", lambda config: Mock(spec=SpeechToText))
     monkeypatch.setattr(app, "build_llm", lambda config: _FakeLLM())
     monkeypatch.setattr(app, "build_vad", lambda config: Mock(spec=VoiceActivityDetector))
     monkeypatch.setattr(app, "build_memory", lambda config: memory)
     monkeypatch.setattr(app, "build_tts_for_persona", lambda config, persona: Mock(spec=TextToSpeech))
+    # No agent by default, whatever the config says, so these tests never
+    # reach a real model; test_tool_use_is_shown installs a fake one.
+    monkeypatch.setattr(app, "build_agent", lambda config, memory: None)
     return memory
+
+
+class _FakeAgent:
+    def handles(self, persona):
+        return bool(persona.tools)
+
+    async def run_stream(self, persona, user_id, built):
+        from companion.core.agent import TextDelta, ToolFinished, ToolStarted
+
+        yield ToolStarted("get_datetime")
+        yield ToolFinished("get_datetime", ok=True)
+        yield TextDelta("It's Monday.")
 
 
 def test_chat_message_round_trip(fake_backends):
@@ -90,3 +110,19 @@ def test_clear_button_empties_the_chat_window(fake_backends):
 
     assert not at.exception, at.exception
     assert "Hello from the fake model." not in [m.value for m in at.markdown]
+
+
+def test_tool_use_is_shown_for_a_persona_with_tools(fake_backends, monkeypatch):
+    from companion import app
+
+    monkeypatch.setattr(app, "build_agent", lambda config, memory: _FakeAgent())
+    at = AppTest.from_file(APP_PATH, default_timeout=30)
+    at.run()
+    at.sidebar.selectbox[0].set_value("planner").run()
+
+    at.chat_input[0].set_value("What day is it?").run()
+
+    assert not at.exception, at.exception
+    assert any(c.value.startswith("Tools: ") for c in at.caption)
+    assert "It's Monday." in [m.value for m in at.markdown]
+    assert "🔧 get_datetime" in [m.value for m in at.markdown]

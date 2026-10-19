@@ -45,6 +45,7 @@ scans `sorted(directory.glob(...))`). The Streamlit UI has its own picker.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
@@ -54,13 +55,17 @@ from companion.backends.tts.coqui_local import CoquiTTS
 from companion.backends.tts.piper_local import PiperTTS
 from companion.backends.vad.silero_vad import SileroVAD
 from companion.config.loader import AppConfig, BackendConfig
+from companion.core.agent import AgentEvent, ToolStarted
 from companion.core.interfaces.types import Persona, Turn
 from companion.core.orchestrator import Orchestrator
 from companion.core.persona_loader import PersonaLoader
 from companion.core.prompt_builder import PromptBuilder
 from companion.memory.store import VectorMemoryStore
+from companion.tools.registry import validate_persona_tools
+from companion.tools.store import ToolStore
 
 if TYPE_CHECKING:
+    from companion.core.agent import AgentRunner
     from companion.core.interfaces import (
         LLMBackend,
         MemoryStore,
@@ -70,6 +75,8 @@ if TYPE_CHECKING:
     )
 
 _EXIT_COMMANDS = {"exit", "quit"}
+_DEFAULT_TOOL_DATA_DIR = "./data/tools"
+REMINDER_POLL_S = 20.0
 
 
 class AppSetupError(RuntimeError):
@@ -159,9 +166,63 @@ def build_tts_for_persona(config: AppConfig, persona: Persona) -> TextToSpeech:
 
 def load_personas(config: AppConfig) -> dict[str, Persona]:
     """Raises `PersonaError` (from companion.core.persona_loader) if any
-    persona file in `config.personas_dir` is malformed — not caught here,
-    left to propagate with its own already-actionable message."""
-    return PersonaLoader(config.personas_dir).load_all()
+    persona file in `config.personas_dir` is malformed, or `UnknownToolError`
+    if one lists a tool that doesn't exist — not caught here, left to
+    propagate with their own already-actionable messages. Tool names are
+    checked even with no `agent:` section, since an unknown name is a typo
+    either way."""
+    personas = PersonaLoader(config.personas_dir).load_all()
+    validate_persona_tools(personas.values())
+    return personas
+
+
+def build_agent(config: AppConfig, memory: MemoryStore) -> AgentRunner | None:
+    """The agent loop for personas with `tools:`. None when config has no
+    `agent:` section, in which case every persona uses the plain LLM."""
+    if config.agent is None:
+        return None
+    if config.agent.backend != "langgraph":
+        raise AppSetupError(
+            f"agent.backend {config.agent.backend!r} is not implemented — only 'langgraph' is."
+        )
+    import importlib.util
+
+    missing = [m for m in ("langgraph", "langchain", "langchain_ollama")
+               if importlib.util.find_spec(m) is None]
+    if missing:
+        raise AppSetupError(
+            f"the agent: section needs the agents extra ({', '.join(missing)} not installed). "
+            'Run: pip install -e ".[agents]", or remove the agent: section.'
+        )
+    from companion.backends.agent.langgraph_ollama import LangGraphOllamaAgent
+
+    return LangGraphOllamaAgent(memory=memory, **config.agent.options)
+
+
+def tool_data_dir(config: AppConfig) -> str:
+    if config.agent is None:
+        return _DEFAULT_TOOL_DATA_DIR
+    return config.agent.options.get("data_dir", _DEFAULT_TOOL_DATA_DIR)
+
+
+def take_due_reminders(
+    config: AppConfig, user_id: str, personas: dict[str, Persona]
+) -> list[str]:
+    """Due reminders for this user, as display lines, each returned exactly
+    once. Empty when there's no agent (so no reminders tool) configured."""
+    from datetime import datetime
+
+    if config.agent is None:
+        return []
+    due = ToolStore(tool_data_dir(config)).take_due_reminders(
+        user_id, datetime.now().astimezone()
+    )
+    lines = []
+    for reminder in due:
+        setter = personas.get(reminder.persona_id)
+        source = f" (from {setter.name})" if setter else ""
+        lines.append(f"⏰ Reminder{source}: {reminder.text}")
+    return lines
 
 
 def select_persona(personas: dict[str, Persona], requested_id: str | None) -> Persona:
@@ -180,13 +241,15 @@ def select_persona(personas: dict[str, Persona], requested_id: str | None) -> Pe
 
 
 def build_orchestrator(config: AppConfig, persona: Persona) -> Orchestrator:
+    memory = build_memory(config)
     return Orchestrator(
         stt=build_stt(config),
         tts=build_tts_for_persona(config, persona),
         llm=build_llm(config),
         vad=build_vad(config),
-        memory=build_memory(config),
+        memory=memory,
         prompt_builder=PromptBuilder(),
+        agent=build_agent(config, memory),
     )
 
 
@@ -201,8 +264,15 @@ async def run_text_loop(
     *,
     read_input: Callable[[str], Awaitable[str]] = _default_read_input,
     print_fn: Callable[[str], None] = print,
+    check_reminders: Callable[[], list[str]] | None = None,
+    reminder_poll_s: float = REMINDER_POLL_S,
 ) -> None:
     """Minimal read/generate/print loop against `handle_text_turn`.
+
+    `check_reminders` (e.g. `take_due_reminders` bound to this config and
+    user) is polled by a background task every `reminder_poll_s` seconds,
+    so a reminder shows up even while you're idle at the prompt. When a
+    persona uses a tool, a short "(using ...)" line is printed.
 
     `read_input`/`print_fn` are injectable so this loop's mechanics
     (exit commands, blank-input handling, `recent_turns` accumulation)
@@ -214,6 +284,37 @@ async def run_text_loop(
     """
     print_fn(f"Talking to {persona.name} ({persona.id}). Type 'exit' to quit.\n")
     recent_turns: list[Turn] = []
+
+    async def poll_reminders() -> None:
+        while True:
+            for line in await asyncio.to_thread(check_reminders):
+                print_fn(f"\n{line}\n")
+            await asyncio.sleep(reminder_poll_s)
+
+    def show_tool_use(event: AgentEvent) -> None:
+        if isinstance(event, ToolStarted):
+            print_fn(f"  (using {event.name}...)")
+
+    poller = asyncio.create_task(poll_reminders()) if check_reminders else None
+    try:
+        await _text_loop_body(orchestrator, persona, user_id, recent_turns,
+                              read_input, print_fn, show_tool_use)
+    finally:
+        if poller is not None:
+            poller.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await poller
+
+
+async def _text_loop_body(
+    orchestrator: Orchestrator,
+    persona: Persona,
+    user_id: str,
+    recent_turns: list[Turn],
+    read_input: Callable[[str], Awaitable[str]],
+    print_fn: Callable[[str], None],
+    on_agent_event: Callable[[AgentEvent], None],
+) -> None:
     while True:
         try:
             message = await read_input("you> ")
@@ -226,7 +327,8 @@ async def run_text_loop(
             break
 
         reply = await orchestrator.handle_text_turn(
-            user_id=user_id, persona=persona, recent_turns=recent_turns, message=message
+            user_id=user_id, persona=persona, recent_turns=recent_turns, message=message,
+            on_agent_event=on_agent_event,
         )
         print_fn(f"{persona.name}> {reply}\n")
 
