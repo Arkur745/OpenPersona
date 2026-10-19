@@ -128,6 +128,12 @@ def test_from_voice_id_resolves_speaker_name():
     assert tts.speaker_wav is None  # voice cloning not wired up via from_voice_id yet
 
 
+def test_from_voice_id_default_means_single_speaker_model():
+    tts = CoquiTTS.from_voice_id("coqui:default", model_name="tts_models/en/ljspeech/vits")
+
+    assert tts.speaker is None
+
+
 def test_from_voice_id_rejects_other_backend_namespace():
     with pytest.raises(ValueError):
         CoquiTTS.from_voice_id("piper:something", model_name="tts_models/some/model")

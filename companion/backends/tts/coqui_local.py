@@ -82,6 +82,9 @@ from companion.core.interfaces.text_to_speech import TextToSpeech
 _DEFAULT_CHUNK_FRAMES = 4096  # ~0.19s at 22050 Hz — see chunk_frames below
 
 
+DEFAULT_SPEAKER = "default"
+
+
 class CoquiTTS(TextToSpeech):
     def __init__(
         self,
@@ -112,6 +115,12 @@ class CoquiTTS(TextToSpeech):
         built-in speaker name on `model_name`. Raises ValueError if
         `voice_id` isn't namespaced for this backend.
 
+        `coqui:default` means "no speaker name": the voice of a
+        single-speaker model such as `tts_models/en/ljspeech/vits`, which
+        rejects any `speaker` argument. A persona's `voice_id` must always
+        have a value after the colon, so this reserved one is how a
+        persona selects such a model's only voice.
+
         This does not do voice-cloning resolution (`speaker_wav`) — see
         the module docstring's "Voice cloning" section for why, and for
         the shape this would take if/when that's wired up.
@@ -122,7 +131,8 @@ class CoquiTTS(TextToSpeech):
                 f"voice_id {voice_id!r} is not a coqui: voice "
                 '(expected "coqui:<speaker-name>")'
             )
-        return cls(model_name=model_name, speaker=speaker_name, **kwargs)
+        speaker = None if speaker_name == DEFAULT_SPEAKER else speaker_name
+        return cls(model_name=model_name, speaker=speaker, **kwargs)
 
     async def _ensure_model(self):
         if self._model is None:

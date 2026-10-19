@@ -46,7 +46,8 @@ example_dialogue:
   for `<voices_dir>/en_US-lessac-medium.onnx`;
   `CoquiTTS.from_voice_id("coqui:some-speaker", model_name=...)` treats the
   part after the colon as a built-in speaker name for a multi-speaker
-  Coqui model (see `companion/backends/tts/coqui_local.py`'s module
+  Coqui model, and `coqui:default` selects a single-speaker model's only
+  voice (see `companion/backends/tts/coqui_local.py`'s module
   docstring for how this extends to voice cloning later without changing
   this field's shape). The persona loader
   (`companion/core/persona_loader/`) only validates that `voice_id` is

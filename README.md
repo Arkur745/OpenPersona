@@ -218,6 +218,11 @@ aren't installed are reported as SKIP. Limit: native code that opens its
 own sockets isn't covered, so for a full guarantee, run it with the
 network actually off.
 
+Checked on 2026-10-19 with both TTS backends: Piper, and Coqui with
+`tts_models/en/ljspeech/vits` (persona `voice_id: coqui:default`; needs
+the espeak-ng system binary). Coqui's multi-GB XTTS-v2 model wasn't run
+through it.
+
 See `docs/CONTRIBUTING.md` for the full contributor setup and
 `docs/PERSONA_AUTHORING.md` to add a persona (no code changes required).
 
