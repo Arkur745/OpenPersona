@@ -22,32 +22,24 @@ a class at all); `build_tts_for_persona` branches for real between
 why `memark`'s import is deferred into its branch rather than living
 alongside the other backend imports at module top.
 
-## What this does NOT wire up
+## Modes and model selection
 
-- **Voice mode.** `mode: voice` in config is recognized and rejected with
-  a clear message (see `companion/__main__.py`) rather than silently
-  running text mode instead — this pass only drives `handle_text_turn`.
-  `Orchestrator.handle_voice_turn` itself is already real (build-order
-  step 6); what a voice-mode CLI loop would still need beyond what exists
-  today: an actual mic-capture `AsyncIterator[bytes]` source and an audio
-  *playback* sink for the bytes `handle_voice_turn` yields. Neither
-  exists yet, and this module doesn't invent them.
-- **`llm.voice_mode_override`** (config.example.yaml). This key predates
-  this bootstrap pass and describes a mode-based model swap that
-  `Orchestrator` has never actually implemented — there is no mode-aware
-  branch inside `Orchestrator` itself, only one `llm: LLMBackend`
-  reference used uniformly by both `handle_text_turn` and
-  `handle_voice_turn`. Text mode (this pass) never needs it, so it's
-  parsed through by the config loader (kept, not rejected as unknown)
-  but not read or acted on here. Flagged explicitly rather than quietly
-  implementing mode-switching logic inside `Orchestrator` that wasn't
-  asked for.
-- **Persona selection UI.** Nothing before this pass defined how a
-  persona gets chosen for a session. `select_persona()` below picks a
-  reasonable default — an explicit `--persona <id>` CLI arg if given,
-  else the first persona `PersonaLoader.load_all()` returns (which is
-  alphabetical by filename, since it scans `sorted(directory.glob(...))`)
-  — rather than inventing a selection UI that wasn't requested.
+- **Text mode** runs `run_text_loop` below; **voice mode** runs
+  `companion/voice_app.py`'s `run_voice_session` (real mic capture and
+  speaker playback around `Orchestrator.handle_voice_turn`).
+  `companion/__main__.py` dispatches on `config.mode`.
+- **`llm.voice_mode_override`**: in voice mode, `build_llm` merges these
+  options (typically a smaller, faster model) over `llm.options`. Mode is
+  fixed per session, so `Orchestrator` still holds a single `llm` and has
+  no mode-aware branch.
+
+## Persona selection
+
+Nothing defined how a persona gets chosen for a session, so
+`select_persona()` below picks a reasonable default: an explicit
+`--persona <id>` CLI arg if given, else the first persona
+`PersonaLoader.load_all()` returns (alphabetical by filename, since it
+scans `sorted(directory.glob(...))`). The Streamlit UI has its own picker.
 """
 
 from __future__ import annotations
@@ -101,7 +93,17 @@ def build_stt(config: AppConfig) -> SpeechToText:
 
 
 def build_llm(config: AppConfig) -> LLMBackend:
-    return _build_single_backend(config.llm, "ollama", OllamaLLM, "llm")
+    """In voice mode, `llm.voice_mode_override.options` (typically a
+    smaller, faster model) are merged over `llm.options`. Mode is fixed for
+    a whole session, so this is decided once here; `Orchestrator` still
+    holds a single `llm`. The Streamlit UI's push-to-talk goes through the
+    text path, so it uses the base options."""
+    section = config.llm
+    if config.mode == "voice" and config.llm_voice_override:
+        section = BackendConfig(
+            backend=section.backend, options={**section.options, **config.llm_voice_override}
+        )
+    return _build_single_backend(section, "ollama", OllamaLLM, "llm")
 
 
 def build_vad(config: AppConfig) -> VoiceActivityDetector:

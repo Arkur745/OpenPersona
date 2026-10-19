@@ -87,9 +87,12 @@ llm:
     top_k: null
     seed: null                       # set for reproducible output (e.g. tests)
     stop: null                       # e.g. ["User:"] to stop generation at a turn boundary
-  # Separate, smaller model for voice mode to hit latency targets — the
-  # orchestrator picks between `llm` and `llm_voice_override` by mode, this
-  # is config, not a second code path (see core/orchestrator/).
+  # Separate, smaller model for voice mode to hit latency targets. In
+  # `mode: voice`, these options are merged over `llm.options` above
+  # (companion/app.py's build_llm). Only `options` can be overridden. The
+  # model must be pulled (`ollama pull qwen2.5:3b-instruct`), or the first
+  # voice reply fails with a model-not-found error; delete this block to
+  # use the main model in voice mode too.
   voice_mode_override:
     options:
       model: qwen2.5:3b-instruct

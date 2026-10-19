@@ -61,11 +61,10 @@ listening iteration); see `docs/ARCHITECTURE.md`'s "A real deadlock found
 via the first real, continuous mic round trip" section and
 `Orchestrator._pump_mic`'s docstring. What's *not* done yet:
 `RollingSummarizer`
-(`companion/memory/summarizer.py`, unimplemented/unwired), and
-`llm.voice_mode_override` in config.example.yaml (a real, pre-existing
-gap found while wiring real backends together — that config key
-describes mode-based model-swapping `Orchestrator` has never actually
-implemented; see `app.py`'s module docstring). Check whether the
+(`companion/memory/summarizer.py`, unimplemented/unwired).
+(`llm.voice_mode_override` used to be listed here too; it's now real:
+`companion.app.build_llm` merges its options over `llm.options` in voice
+mode.) Check whether the
 specific method/module you're touching is one of those gaps before
 assuming it's live. Project license is MIT (this repo's own code only —
 see `THIRD_PARTY_LICENSES.md` for bundled/downloaded model weights,
@@ -385,8 +384,8 @@ without being asked):
    local Ollama server and real Chroma storage, not just tests. See
    `docs/ARCHITECTURE.md`'s "App bootstrap" section, including a real
    pre-existing gap found while wiring real backends together
-   (`llm.voice_mode_override` was never actually implemented in
-   `Orchestrator`).
+   (`llm.voice_mode_override` wasn't implemented; it is now, in
+   `app.build_llm`, applied once per voice session).
 10. ~~Implement a voice-mode CLI (real mic capture + real speaker
     playback)~~ — done. `companion/audio/` (`MicCapture`,
     `SpeakerPlayback`, sounddevice-backed) + `companion/voice_app.py`

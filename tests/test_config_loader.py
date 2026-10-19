@@ -63,6 +63,7 @@ def test_loads_the_real_config_example_yaml():
     assert config.audio.backend == "sounddevice"
     assert config.audio.options["sample_rate"] == 16000
     assert config.mode == "text"
+    assert config.llm_voice_override == {"model": "qwen2.5:3b-instruct"}
 
 
 def test_valid_config_parses_all_sections(tmp_path):
@@ -180,6 +181,49 @@ def test_section_not_a_mapping_rejected(tmp_path):
 
     with pytest.raises(ConfigError, match="stt"):
         load_config(path)
+
+
+# --- llm.voice_mode_override ----------------------------------------------
+
+
+def _with_llm(llm_section: dict) -> dict:
+    return {**VALID_CONFIG, "llm": llm_section}
+
+
+def test_voice_override_defaults_to_empty_when_absent(tmp_path):
+    config = load_config(_write_config(tmp_path, VALID_CONFIG))
+
+    assert config.llm_voice_override == {}
+
+
+def test_voice_override_options_are_parsed(tmp_path):
+    data = _with_llm({
+        "backend": "ollama",
+        "options": {"model": "big"},
+        "voice_mode_override": {"options": {"model": "small", "temperature": 0.2}},
+    })
+
+    config = load_config(_write_config(tmp_path, data))
+
+    assert config.llm_voice_override == {"model": "small", "temperature": 0.2}
+    assert config.llm.options == {"model": "big"}
+
+
+def test_voice_override_rejects_backend_switching(tmp_path):
+    data = _with_llm({
+        "backend": "ollama",
+        "voice_mode_override": {"backend": "other", "options": {}},
+    })
+
+    with pytest.raises(ConfigError, match="voice_mode_override only supports 'options'"):
+        load_config(_write_config(tmp_path, data))
+
+
+def test_voice_override_must_be_a_mapping(tmp_path):
+    data = _with_llm({"backend": "ollama", "voice_mode_override": "small"})
+
+    with pytest.raises(ConfigError, match="voice_mode_override must be a mapping"):
+        load_config(_write_config(tmp_path, data))
 
 
 # --- resolve_config_path -------------------------------------------------

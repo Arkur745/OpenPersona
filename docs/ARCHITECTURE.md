@@ -540,8 +540,7 @@ and "Voice mode audio I/O" below for the voice-specific pieces.
   sections, `backend`/`options` shape, `tts.voices_dir`, `mode`) but,
   unlike the persona loader, does not reject unrecognized keys — an
   `options:` block is inherently backend-defined and meant to grow, and
-  config.example.yaml already ships a key
-  (`llm.voice_mode_override`, see below) this pass doesn't act on. A bad
+  config.example.yaml ships keys the loader only passes through. A bad
   `options:` key surfaces naturally as a `TypeError` from the backend's
   own constructor instead — not re-validated redundantly here.
 - **This is the one place backend-name branching is expected**, per
@@ -564,16 +563,15 @@ and "Voice mode audio I/O" below for the voice-specific pieces.
   `PersonaLoader.load_all()` returns (alphabetical by filename). Memory's
   `user_id` similarly has no auth system behind it (out of scope per this
   project's brief) — `--user-id` defaults to `"local"`.
-- **A real gap found while wiring real backends together, not
-  invented**: `config.example.yaml`'s `llm.voice_mode_override` describes
-  a mode-based model swap "picked by the orchestrator by mode" that
-  `Orchestrator` has never actually implemented — there's no mode
-  parameter or override-selection logic anywhere in `Orchestrator`, only
-  one `llm: LLMBackend` used uniformly. Text mode never needs it, so
-  `app.py` parses it through (the config loader doesn't reject it) but
-  doesn't read or act on it. Not resolved here — flagged instead of
-  quietly adding mode-switching logic to `Orchestrator` that wasn't
-  asked for.
+- **`llm.voice_mode_override`** (a gap found while wiring real backends,
+  since closed): the config loader parses `llm.voice_mode_override.options`
+  into `AppConfig.llm_voice_override`, and `build_llm` merges them over
+  `llm.options` when `mode: voice`. Mode is fixed for a whole session, so
+  this is decided once at construction; `Orchestrator` still holds a
+  single `llm` with no mode branch. Only `options` can be overridden: a
+  `backend` key there is rejected, since switching LLM backends by mode
+  isn't supported. The Streamlit UI's push-to-talk goes through
+  `handle_text_turn` and uses the base options.
 - **Errors are actionable, not raw tracebacks**: `__main__.py`'s `main()`
   wraps the whole run in one `except Exception`, printing `str(exc)` and
   exiting 1 (`--debug` re-raises for a full traceback) — this works

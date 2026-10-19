@@ -18,10 +18,9 @@ stt/tts/llm/vad/memory it isn't constructed by `companion/app.py`'s
 `build_orchestrator` at all, only by `companion/voice_app.py`, but
 `load_config` doesn't know or care which mode a given config is for) but
 does not
-reject unrecognized keys inside an `options:` block, or extra top-level
-keys such as `llm.voice_mode_override` (parsed through untouched — see
-companion/app.py's module docstring for why that key isn't acted on
-yet). Whether a given `options:` entry is actually valid for its backend
+reject unrecognized keys inside an `options:` block. The one nested key it
+does parse is `llm.voice_mode_override` (into `AppConfig.llm_voice_override`;
+`companion.app.build_llm` applies it in voice mode). Whether a given `options:` entry is actually valid for its backend
 is enforced for free by that backend's own constructor (a bad key raises
 `TypeError`) — companion/app.py is responsible for that failure surfacing
 as an actionable message, not this loader re-validating it up front.
@@ -74,6 +73,9 @@ class AppConfig:
     memory: BackendConfig
     audio: BackendConfig
     mode: str
+    # `llm.voice_mode_override.options`, merged over `llm.options` by
+    # `companion.app.build_llm` when `mode == "voice"`. Empty = no override.
+    llm_voice_override: dict[str, Any] = field(default_factory=dict)
 
 
 def _require_section(data: dict, key: str, path: Path) -> dict:
@@ -112,6 +114,26 @@ def _backend_config(data: dict, section_name: str, path: Path) -> BackendConfig:
     section = _require_section(data, section_name, path)
     backend = _require_str(section, "backend", section_name, path)
     return BackendConfig(backend=backend, options=_options(section, section_name, path))
+
+
+def _llm_voice_override(data: dict, path: Path) -> dict[str, Any]:
+    """`llm.voice_mode_override` may only override `options` — swapping
+    the LLM *backend* by mode isn't supported, so any other key is
+    rejected rather than silently ignored."""
+    override = data["llm"].get("voice_mode_override")
+    if override is None:
+        return {}
+    if not isinstance(override, dict):
+        raise ConfigError(
+            f"{path}: llm.voice_mode_override must be a mapping, got {type(override).__name__}"
+        )
+    unknown = set(override) - {"options"}
+    if unknown:
+        raise ConfigError(
+            f"{path}: llm.voice_mode_override only supports 'options' "
+            f"(got {sorted(unknown)}); the LLM backend itself can't differ by mode"
+        )
+    return _options(override, "llm.voice_mode_override", path)
 
 
 def load_config(path: str | Path) -> AppConfig:
@@ -161,6 +183,7 @@ def load_config(path: str | Path) -> AppConfig:
         memory=memory,
         audio=audio,
         mode=mode,
+        llm_voice_override=_llm_voice_override(data, path),
     )
 
 
