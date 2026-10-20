@@ -53,8 +53,8 @@ Things these numbers don't include:
 
 | Tier | Example hardware | What to expect |
 |---|---|---|
-| Minimum, text mode | 4+ CPU cores, 8 GB RAM, no GPU | 7B model on CPU: replies stream at a few tokens/s; usable for text, slow. A 3B model (`qwen2.5:3b-instruct`) should be faster (not measured here). |
-| Minimum, voice mode | 8+ cores, 16 GB RAM, no GPU | STT `base` on CPU is fine (0.09× real time measured above); the LLM on CPU is the bottleneck, so use a ~3B model via `llm.voice_mode_override`. Expect a few seconds before each reply. |
+| Minimum, text mode | 4+ CPU cores, 8 GB RAM, no GPU | 7B model on CPU: replies stream at a few tokens/s; usable for text, slow. A smaller model such as `qwen2.5:1.5b-instruct` (Apache-2.0) should be faster (not measured here). Note that `qwen2.5:3b-instruct` is research-licensed (see THIRD_PARTY_LICENSES.md). |
+| Minimum, voice mode | 8+ cores, 16 GB RAM, no GPU | STT `base` on CPU is fine (0.09× real time measured above); the LLM on CPU is the bottleneck, so uncomment `llm.voice_mode_override` (`qwen2.5:1.5b-instruct`). Expect a few seconds before each reply. |
 | Recommended | 6 GB+ NVIDIA GPU, 16 GB RAM (the machine above) | ~0.85 s to first audio in voice mode, 7–8B models at ~35 tok/s, tool turns under 2 s. |
 | Full fidelity (XTTS-v2 voice cloning, larger Whisper, bigger LLMs) | 12 GB+ VRAM, 32 GB RAM | Not measured here. A 7B LLM (~4.7 GB) plus XTTS-v2 (a further ~2 GB) likely won't both fit on a 6 GB card. |
 

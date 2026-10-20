@@ -87,15 +87,19 @@ llm:
     top_k: null
     seed: null                       # set for reproducible output (e.g. tests)
     stop: null                       # e.g. ["User:"] to stop generation at a turn boundary
-  # Separate, smaller model for voice mode to hit latency targets. In
-  # `mode: voice`, these options are merged over `llm.options` above
-  # (companion/app.py's build_llm). Only `options` can be overridden. The
-  # model must be pulled (`ollama pull qwen2.5:3b-instruct`), or the first
-  # voice reply fails with a model-not-found error; delete this block to
-  # use the main model in voice mode too.
-  voice_mode_override:
-    options:
-      model: qwen2.5:3b-instruct
+  # Optional: a different (usually smaller, faster) model for voice mode.
+  # Off by default: voice mode uses the model above, which measured ~0.85 s
+  # to first audio on a 6 GB laptop GPU (docs/HARDWARE_REQUIREMENTS.md).
+  # On a CPU-only machine, uncomment this to use qwen2.5:1.5b-instruct
+  # (Apache-2.0, like the 7B; `ollama pull qwen2.5:1.5b-instruct` first, or
+  # the first voice reply fails with a model-not-found error). In
+  # `mode: voice` these options are merged over `llm.options`
+  # (companion/app.py's build_llm); only `options` can be overridden.
+  # Avoid qwen2.5:3b-instruct here: unlike the 1.5B and 7B it's under the
+  # Qwen Research License (non-commercial); see THIRD_PARTY_LICENSES.md.
+  # voice_mode_override:
+  #   options:
+  #     model: qwen2.5:1.5b-instruct
 
 # --- Agentic personas -----------------------------------------------------
 # Personas that list `tools:` (see companion/personas/schema.md) run as

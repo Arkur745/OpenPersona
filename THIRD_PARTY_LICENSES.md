@@ -32,7 +32,9 @@ model repos can and do change.
 
 | Component | License / terms | Notes |
 |---|---|---|
-| **Qwen2.5-7B-Instruct** (default `agent.options.model`) | Apache-2.0 | Same caveat as the LLM row above: this project names the model in config, it doesn't ship the weights. Some *larger* Qwen2.5 sizes use a separate Qwen license; the 7B doesn't. |
+| **Qwen2.5-7B-Instruct** (default `llm.options.model` and `agent.options.model`, used in every mode) | Apache-2.0 | Same caveat as the LLM row above: this project names the model in config, it doesn't ship the weights. |
+| **Qwen2.5-1.5B-Instruct** (suggested, commented out, for `llm.voice_mode_override` on CPU-only machines) | Apache-2.0 | Not a default; only used if you uncomment the override. |
+| **Qwen2.5-3B-Instruct** (deliberately **not** used) | Qwen Research License (`license_name: qwen-research` on its model card) | Restricts commercial use. Qwen2.5 sizes don't all share one license: the 0.5B, 1.5B, 7B, 14B and 32B are Apache-2.0; the 3B is research-only and the 72B has its own Qwen license. Check before pointing any config at a different size. Earlier versions of `config.example.yaml` used the 3B as the voice-mode default; it was removed on 2026-10-20 for this reason. |
 | `langgraph`, `langchain`, `langchain-core`, `langchain-ollama` (`agents` extra) | MIT | Libraries only; no model weights. |
 | `ddgs` (`tools-online` extra, `web_search` tool) | MIT (the package) | Queries DuckDuckGo's public endpoints, which have no official API terms and may rate-limit. Off by default (`agent.options.allow_network: false`). |
 | Open-Meteo (`weather` tool) | Free for non-commercial use; data CC BY 4.0 | No API key. Commercial use needs Open-Meteo's paid plan; attribution is required where the data is shown. Off by default, same flag as above. |

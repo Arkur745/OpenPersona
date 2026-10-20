@@ -115,13 +115,13 @@ def test_build_llm_constructs_ollama_with_options():
 
 
 def test_build_llm_applies_voice_override_only_in_voice_mode():
-    override = {"model": "qwen2.5:3b-instruct", "temperature": 0.2}
+    override = {"model": "qwen2.5:1.5b-instruct", "temperature": 0.2}
 
     text_llm = build_llm(_config(mode="text", llm_voice_override=override))
     voice_llm = build_llm(_config(mode="voice", llm_voice_override=override))
 
     assert (text_llm.model, text_llm.temperature) == ("qwen2.5:7b-instruct", 0.7)
-    assert (voice_llm.model, voice_llm.temperature) == ("qwen2.5:3b-instruct", 0.2)
+    assert (voice_llm.model, voice_llm.temperature) == ("qwen2.5:1.5b-instruct", 0.2)
 
 
 def test_build_llm_in_voice_mode_without_override_uses_base_options():

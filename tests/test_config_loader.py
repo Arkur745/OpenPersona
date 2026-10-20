@@ -64,7 +64,8 @@ def test_loads_the_real_config_example_yaml():
     assert config.audio.backend == "sounddevice"
     assert config.audio.options["sample_rate"] == 16000
     assert config.mode == "text"
-    assert config.llm_voice_override == {"model": "qwen2.5:3b-instruct"}
+    # The voice override ships commented out: voice mode uses the main model.
+    assert config.llm_voice_override == {}
     assert config.summarizer_trigger_turn_count == 50
 
 
