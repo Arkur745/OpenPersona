@@ -245,6 +245,15 @@ memories gave 10/10 reminders stored, versus 3/5 before.
 *Rejected:* dropping the persona's own past replies from memory. That
 also gave 5/5, but would stop every persona recalling what it said
 before.
+*Follow-up the same day:*
+- Tool arguments are designed for the 7B model. `set_reminder(what,
+  when)` takes two required plain-text fields parsed in code, replacing
+  an either/or pair the model often left empty (20/20 stored, versus
+  0/5 on one phrasing).
+- An honesty guard appends a note when a tool's failure was never
+  successfully retried.
+- *Rule:* prefer one required, plainly named argument over optional
+  either/or ones.
 *Details:* `docs/ARCHITECTURE.md` "Agentic personas".
 
 ### D31. Local-only orientation files

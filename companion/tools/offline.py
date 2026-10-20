@@ -172,45 +172,118 @@ def build_notes_tools(ctx: ToolContext) -> list[Tool]:
 # --- reminders -------------------------------------------------------------
 
 
-def parse_due_time(ctx: ToolContext, minutes_from_now: int | None, at: str | None) -> datetime:
+_UNIT_SECONDS = {
+    "s": 1, "sec": 1, "secs": 1, "second": 1, "seconds": 1,
+    "m": 60, "min": 60, "mins": 60, "minute": 60, "minutes": 60,
+    "h": 3600, "hr": 3600, "hrs": 3600, "hour": 3600, "hours": 3600,
+    "d": 86400, "day": 86400, "days": 86400,
+}
+_WORD_NUMBERS = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+                 "ten": 10, "fifteen": 15, "twenty": 20, "thirty": 30, "few": 3}
+_RELATIVE_RE = re.compile(
+    r"^(?:in\s+)?(half\s+an?\s+hour|(\d+(?:\.\d+)?|a|an|one|two|three|four|five|ten|"
+    r"fifteen|twenty|thirty|few)\s*([a-z]+))(?:\s+from\s+now)?$"
+)
+_CLOCK_RE = re.compile(r"^(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?$")
+_NAMED_TIMES = {"noon": "12:00", "midday": "12:00", "midnight": "00:00",
+                "morning": "09:00", "afternoon": "15:00", "evening": "18:00",
+                "tonight": "20:00"}
+
+
+def _clock(text: str) -> tuple[int, int] | None:
+    text = _NAMED_TIMES.get(text, text)
+    m = _CLOCK_RE.match(text)
+    if not m:
+        return None
+    hour, minute, ampm = int(m.group(1)), int(m.group(2) or 0), m.group(3)
+    if ampm:
+        if not 1 <= hour <= 12:
+            return None
+        hour = hour % 12 + (12 if ampm.startswith("p") else 0)
+    if hour > 23 or minute > 59:
+        return None
+    return hour, minute
+
+
+def parse_when(ctx: ToolContext, when: str) -> datetime:
+    """Turns what people say into a due time, relative to `ctx.now()`.
+
+    Takes a single free-text field on purpose: given two optional arguments
+    (`minutes_from_now` or `at`), qwen2.5:7b often filled in neither and then
+    claimed the reminder was set (measured 0/5 on one phrasing). Accepts
+    "in 10 minutes", "2 hours", "half an hour", "6pm", "at 18:30",
+    "tomorrow at 9am", "tonight", "noon" and ISO "2026-10-20T17:00". A clock
+    time that has already passed today means tomorrow.
+    """
     now = ctx.now()
-    if (minutes_from_now is None) == (at is None or not at.strip()):
-        raise ToolInputError(
-            "Give exactly one of minutes_from_now or at. For 'in 5 minutes' pass "
-            "minutes_from_now=5; for a clock time pass at='2026-10-20T17:00'."
-        )
-    if minutes_from_now is not None:
-        if minutes_from_now <= 0:
-            raise ToolInputError("minutes_from_now must be positive.")
-        return now + timedelta(minutes=minutes_from_now)
+    raw = (when or "").strip()
+    text = re.sub(r"\s+", " ", raw.lower()).strip(" .")
+    if not text:
+        raise ToolInputError(_WHEN_HELP)
+
+    m = _RELATIVE_RE.match(text)
+    # Only a known unit makes it relative: "6pm" also matches the pattern
+    # (6, "pm") and must fall through to clock times below.
+    if m and (m.group(1).startswith("half") or m.group(3) in _UNIT_SECONDS):
+        if m.group(1).startswith("half"):
+            return now + timedelta(minutes=30)
+        amount = m.group(2)
+        number = _WORD_NUMBERS.get(amount)
+        number = float(amount) if number is None else number
+        if number <= 0:
+            raise ToolInputError(_WHEN_HELP)
+        return now + timedelta(seconds=number * _UNIT_SECONDS[m.group(3)])
+
+    day_offset, rest = 0, text
+    for word, offset in (("tomorrow", 1), ("today", 0), ("tonight", 0)):
+        if text == word or text.startswith(word + " "):
+            day_offset = offset
+            rest = text[len(word):].strip() or ("tonight" if word == "tonight" else "morning")
+            if word == "today" and rest == "morning":
+                rest = text  # "today" alone isn't a time
+            break
+    hm = _clock(rest)
+    if hm is not None:
+        due = now.replace(hour=hm[0], minute=hm[1], second=0, microsecond=0)
+        due += timedelta(days=day_offset)
+        if day_offset == 0 and due <= now:
+            due += timedelta(days=1)  # "6pm" said at 7pm means tomorrow
+        return due
+
     try:
-        due = datetime.fromisoformat(at.strip())
+        due = datetime.fromisoformat(raw)
     except ValueError:
-        raise ToolInputError(
-            f"Can't read {at!r} as a time. Use ISO format like 2026-10-20T09:00."
-        ) from None
+        raise ToolInputError(_WHEN_HELP) from None
     if due.tzinfo is None:
         due = due.replace(tzinfo=now.tzinfo)
     if due <= now:
         raise ToolInputError(
-            f"{at} is in the past (it is now {now:%Y-%m-%dT%H:%M}). Pick a future time."
+            f"{raw} is in the past (it is now {now:%Y-%m-%d %H:%M}). Pick a future time."
         )
     return due
+
+
+_WHEN_HELP = (
+    "Can't tell when to remind. Pass `when` as plain words, e.g. 'in 10 minutes', "
+    "'in 2 hours', '6pm', 'tomorrow at 9am', or an ISO time like '2026-10-20T17:00'."
+)
 
 
 def build_reminders_tools(ctx: ToolContext) -> list[Tool]:
     store = ToolStore(ctx.data_dir)
 
     async def set_reminder(
-        text: Annotated[str, "What to remind the user about"],
-        minutes_from_now: Annotated[int | None, "Delay in minutes, for 'in 10 minutes'"] = None,
-        at: Annotated[str | None, "Exact local time in ISO format, e.g. 2026-10-20T09:00"] = None,
+        what: Annotated[str, "What to remind the user about, e.g. 'drink water'"],
+        when: Annotated[str, "When, in the user's words: 'in 10 minutes', '6pm', "
+                             "'tomorrow at 9am'"],
     ) -> str:
-        if not text.strip():
-            raise ToolInputError("Reminder text is empty.")
-        due = parse_due_time(ctx, minutes_from_now, at)
+        # `what`/`when` rather than `text`/`when`: with `text`, qwen2.5:7b
+        # (Planner persona) filled only `when` in 5/5 runs.
+        if not what.strip():
+            raise ToolInputError("Say what to remind about in `what`, e.g. 'drink water'.")
+        due = parse_when(ctx, when)
         reminder = await asyncio.to_thread(
-            store.add_reminder, ctx.user_id, ctx.persona_id, text.strip(), due, ctx.now()
+            store.add_reminder, ctx.user_id, ctx.persona_id, what.strip(), due, ctx.now()
         )
         return f"Reminder #{reminder.id} set for {_fmt_dt(due, ctx)}: {reminder.text}"
 
@@ -228,9 +301,9 @@ def build_reminders_tools(ctx: ToolContext) -> list[Tool]:
     return [
         Tool("set_reminder", "Set a reminder that will be shown to the user when it's due. "
              "Call it every time the user asks to be reminded, even if a similar "
-             "reminder was set before. Use minutes_from_now for relative times "
-             "(e.g. 1 for 'in a minute'), or at for a specific time (call "
-             "get_datetime first if you need today's date).", set_reminder),
+             "reminder was set before. Always pass both `what` (e.g. 'drink water') "
+             "and `when` in plain words as the user said it ('in 1 minute', '6pm', "
+             "'tomorrow at 9am').", set_reminder),
         Tool("list_reminders", "List the user's upcoming reminders.", list_reminders),
         Tool("cancel_reminder", "Cancel an upcoming reminder by its number.", cancel_reminder),
     ]

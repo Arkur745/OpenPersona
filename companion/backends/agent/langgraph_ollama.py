@@ -47,6 +47,15 @@ logger = logging.getLogger(__name__)
 STUCK_MESSAGE = "Sorry, I got stuck working that out. Could you ask in a different way?"
 
 
+def failed_tool_note(tool_names: list[str]) -> str:
+    """Appended to the reply when a tool failed this turn and was never
+    successfully retried. qwen2.5:7b sometimes says "Done!" after a failed
+    call; this keeps the spoken reply, the text and the saved memory
+    truthful whatever the model claims."""
+    names = ", ".join(name.replace("_", " ") for name in tool_names)
+    return f" (Heads up: {names} didn't go through, so nothing was saved. Please try again.)"
+
+
 class LangGraphOllamaAgent:
     def __init__(
         self,
@@ -140,6 +149,7 @@ class LangGraphOllamaAgent:
         config = {"recursion_limit": 2 * self.max_steps + 1}
 
         announced: set[str] = set()  # tool-call ids already reported as started
+        failed: dict[str, None] = {}  # tools whose last call this turn failed, in order
         try:
             async for chunk, meta in agent.astream(
                 {"messages": self._messages(built)}, config=config, stream_mode="messages"
@@ -147,7 +157,12 @@ class LangGraphOllamaAgent:
                 if isinstance(chunk, ToolMessage):
                     content = str(chunk.content)
                     ok = chunk.status != "error" and not content.startswith("Error:")
-                    yield ToolFinished(chunk.name or "tool", ok=ok,
+                    name = chunk.name or "tool"
+                    if ok:
+                        failed.pop(name, None)  # a successful retry clears it
+                    else:
+                        failed[name] = None
+                    yield ToolFinished(name, ok=ok,
                                        detail="" if ok else content.removeprefix("Error: "))
                     continue
                 if not isinstance(chunk, AIMessage) or meta.get("langgraph_node") != "model":
@@ -172,6 +187,8 @@ class LangGraphOllamaAgent:
                         yield ToolStarted(call["name"])
                 if chunk.content and not pending_call:
                     yield TextDelta(chunk.text)
+            if failed:
+                yield TextDelta(failed_tool_note(list(failed)))
         except GraphRecursionError:
             logger.warning("agent for %s hit max_steps=%d", persona.id, self.max_steps)
             yield TextDelta(STUCK_MESSAGE)

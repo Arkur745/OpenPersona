@@ -170,8 +170,8 @@ def test_note_search_treats_like_wildcards_literally(tmp_path):
 async def test_set_reminder_relative_and_absolute(tmp_path):
     tools = _tools(_ctx(tmp_path), "reminders")
 
-    rel = await tools["set_reminder"](text="Stretch", minutes_from_now=10)
-    abs_ = await tools["set_reminder"](text="Call mom", at="2026-10-20T09:00")
+    rel = await tools["set_reminder"](what="Stretch", when="in 10 minutes")
+    abs_ = await tools["set_reminder"](what="Call mom", when="2026-10-20T09:00")
 
     assert rel == "Reminder #1 set for Mon 19 Oct 2026 18:10: Stretch"
     assert abs_ == "Reminder #2 set for Tue 20 Oct 2026 09:00: Call mom"
@@ -179,23 +179,50 @@ async def test_set_reminder_relative_and_absolute(tmp_path):
     assert listing.index("Stretch") < listing.index("Call mom")
 
 
-@pytest.mark.parametrize("kwargs, message", [
-    ({}, "exactly one"),
-    ({"minutes_from_now": 5, "at": "2026-10-20T09:00"}, "exactly one"),
-    ({"minutes_from_now": 0}, "positive"),
-    ({"at": "tomorrow-ish"}, "ISO format"),
-    ({"at": "2026-10-19T17:00"}, "in the past"),
+@pytest.mark.parametrize("when, message", [
+    ("", "Can't tell when"),
+    ("whenever", "Can't tell when"),
+    ("in 0 minutes", "Can't tell when"),
+    ("13pm", "Can't tell when"),
+    ("at 25:00", "Can't tell when"),
+    ("2026-10-19T17:00", "in the past"),
 ])
-async def test_set_reminder_rejects_bad_times(tmp_path, kwargs, message):
+async def test_set_reminder_rejects_bad_times(tmp_path, when, message):
     tools = _tools(_ctx(tmp_path), "reminders")
 
     with pytest.raises(ToolInputError, match=message):
-        await tools["set_reminder"](text="x", **kwargs)
+        await tools["set_reminder"](what="x", when=when)
+
+
+# NOW is Monday 19 Oct 2026, 18:00 (+05:30).
+@pytest.mark.parametrize("when, expected", [
+    ("in 1 minute", "Mon 18:01"),
+    ("1 min", "Mon 18:01"),
+    ("in a minute", "Mon 18:01"),
+    ("in 2 hours", "Mon 20:00"),
+    ("an hour", "Mon 19:00"),
+    ("half an hour", "Mon 18:30"),
+    ("in 5 minutes from now", "Mon 18:05"),
+    ("18:30", "Mon 18:30"),
+    ("today at 7pm", "Mon 19:00"),
+    ("tonight", "Mon 20:00"),
+    ("6pm", "Tue 18:00"),  # exactly now, so tomorrow
+    ("5pm", "Tue 17:00"),  # already passed today
+    ("at 9:15 am", "Tue 09:15"),
+    ("tomorrow at 9am", "Tue 09:00"),
+    ("tomorrow", "Tue 09:00"),
+    ("noon", "Tue 12:00"),
+    ("2026-10-20T17:00", "Tue 17:00"),
+])
+def test_parse_when_understands_what_people_say(tmp_path, when, expected):
+    from companion.tools.offline import parse_when
+
+    assert f"{parse_when(_ctx(tmp_path), when):%a %H:%M}" == expected
 
 
 async def test_cancel_reminder(tmp_path):
     tools = _tools(_ctx(tmp_path), "reminders")
-    await tools["set_reminder"](text="Stretch", minutes_from_now=10)
+    await tools["set_reminder"](what="Stretch", when="in 10 minutes")
 
     assert await tools["cancel_reminder"](reminder_id=1) == "Cancelled reminder #1."
     assert await tools["cancel_reminder"](reminder_id=1) == "There is no upcoming reminder #1."

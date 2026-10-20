@@ -943,6 +943,25 @@ before the memories, 3 of 5 runs actually stored the reminder; with them
 after, 10 of 10. Tool descriptions also say *when* to use each tool,
 e.g. `add_note` on "note that…", which took the Mentor from 0/5 to 5/5.
 
+**Tool arguments shaped for a 7B model.** `set_reminder` takes two
+required plain-text fields, `what` and `when` ("in 10 minutes", "6pm",
+"tomorrow at 9am", or ISO), parsed by `companion/tools/offline.py`'s
+`parse_when`. A clock time that has already passed means tomorrow.
+Measured against the user's real memory, this was the version that
+worked:
+
+| Signature | Reminders stored |
+|---|---|
+| Original: `minutes_from_now` *or* `at` | 0/5 on one phrasing; the model filled in neither |
+| `text` + `when` | 0/10 for the Planner; it left out `text` |
+| `what` + `when` | **20/20** across two personas and four phrasings |
+
+**Honesty guard.** If a tool's last call in a turn failed and it was
+never successfully retried, the runner appends a short "(Heads up: …
+didn't go through, so nothing was saved…)" to the reply
+(`failed_tool_note`). The text, the spoken reply and the saved memory
+then stay truthful even when the model claims success.
+
 **Only real tool calls are announced, and failures are shown.** The
 runner emits `ToolStarted` from parsed, valid calls (`tool_calls`), never
 from raw `tool_call_chunks`. A malformed call is logged and never

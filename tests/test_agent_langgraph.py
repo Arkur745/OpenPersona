@@ -102,7 +102,7 @@ def test_satisfies_the_agent_runner_protocol(tmp_path):
 
 async def test_tool_call_then_answer(tmp_path):
     agent, model = _agent(tmp_path, [
-        _tool_call("set_reminder", {"text": "Stretch", "minutes_from_now": 10}),
+        _tool_call("set_reminder", {"what": "Stretch", "when": "in 10 minutes"}),
         AIMessage("Done, I'll remind you to stretch in 10 minutes."),
     ])
 
@@ -126,19 +126,52 @@ async def test_tool_call_then_answer(tmp_path):
 
 
 async def test_bad_tool_arguments_go_back_to_the_model_as_an_error(tmp_path):
+    from companion.backends.agent.langgraph_ollama import failed_tool_note
+
     agent, model = _agent(tmp_path, [
-        _tool_call("set_reminder", {"text": "Stretch"}),  # neither time given
+        _tool_call("set_reminder", {"what": "Stretch", "when": "whenever"}),
         AIMessage("When should I remind you?"),
     ])
 
     events = await _run(agent, _persona("reminders"))
 
-    assert events[1] == ToolFinished("set_reminder", ok=False,
-                                     detail="Give exactly one of minutes_from_now or at. For "
-                                     "'in 5 minutes' pass minutes_from_now=5; for a clock time "
-                                     "pass at='2026-10-20T17:00'.")
-    assert events[-1] == TextDelta("When should I remind you?")
-    assert model.seen[1][-1].content.startswith("Error: Give exactly one of minutes_from_now or at.")
+    assert events[1].name == "set_reminder" and not events[1].ok
+    assert events[1].detail.startswith("Can't tell when to remind.")
+    assert model.seen[1][-1].content.startswith("Error: Can't tell when to remind.")
+    # Never retried, so the honesty note is appended after the model's text.
+    assert events[-2:] == [TextDelta("When should I remind you?"),
+                           TextDelta(failed_tool_note(["set_reminder"]))]
+
+
+async def test_unretried_failure_is_flagged_even_if_the_model_claims_success(tmp_path):
+    """Seen in manual testing: set_reminder failed, then the model said
+    "I've set a reminder for you". The note keeps the reply truthful."""
+    from companion.backends.agent.langgraph_ollama import failed_tool_note
+
+    agent, _ = _agent(tmp_path, [
+        _tool_call("set_reminder", {"what": "Stretch", "when": "whenever"}),
+        AIMessage("I've set a reminder for you to stretch!"),
+    ])
+
+    events = await _run(agent, _persona("reminders"))
+    text = "".join(e.text for e in events if isinstance(e, TextDelta))
+
+    assert text.endswith(failed_tool_note(["set_reminder"]))
+    assert "set reminder didn't go through" in text
+    assert ToolStore(tmp_path).pending_reminders("u1") == []
+
+
+async def test_successful_retry_clears_the_failure(tmp_path):
+    agent, _ = _agent(tmp_path, [
+        _tool_call("set_reminder", {"what": "Stretch", "when": "whenever"}),
+        _tool_call("set_reminder", {"what": "Stretch", "when": "in 1 minute"}),
+        AIMessage("Done, in a minute."),
+    ])
+
+    events = await _run(agent, _persona("reminders"))
+
+    assert [e for e in events if isinstance(e, TextDelta)] == [TextDelta("Done, in a minute.")]
+    assert [r.text for r in ToolStore(tmp_path).pending_reminders("u1")] == ["Stretch"]
 
 
 async def test_hitting_max_steps_gives_an_apology_not_an_exception(tmp_path):
