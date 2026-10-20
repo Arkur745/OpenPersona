@@ -79,6 +79,12 @@ class _FakeMemoryStore(MemoryStore):
     async def delete(self, user_id: str, persona_id: str | None = None) -> None:
         raise NotImplementedError
 
+    async def list_turns(self, user_id: str, persona_id: str) -> list[Turn]:
+        return []
+
+    async def replace_turns(self, user_id, persona_id, old, new) -> bool:
+        return False
+
 
 class _FakeSTT(SpeechToText):
     """Always reports the same fixed transcript once any audio has been
@@ -810,3 +816,38 @@ async def test_pending_announcements_are_spoken_first_but_not_remembered():
 
     assert tts.synthesized_sentences == ["Reminder: stretch.", "Hi."]
     assert memory.written[-1][2].text == "Hi."
+
+
+class _RecordingSummarizer:
+    """Records calls and when they happened relative to memory writes."""
+
+    def __init__(self, memory: _FakeMemoryStore) -> None:
+        self.memory = memory
+        self.calls: list[tuple[str, str, int]] = []
+
+    async def summarize_if_due(self, user_id: str, persona_id: str) -> bool:
+        self.calls.append((user_id, persona_id, len(self.memory.written)))
+        return False
+
+
+@pytest.mark.asyncio
+async def test_voice_turn_schedules_summarizer_after_memory_writes():
+    """docs/ROLLING_SUMMARIZER.md section 5: after each voice turn's writes,
+    the summarizer runs as a background task."""
+    memory = _FakeMemoryStore()
+    summarizer = _RecordingSummarizer(memory)
+    orchestrator = Orchestrator(
+        stt=_FakeSTT(transcript="hello there"),
+        tts=_FakeTTS(),
+        llm=_FakeLLM(["Hi. "]),
+        vad=_FakeVAD(),
+        memory=memory,
+        prompt_builder=PromptBuilder(),
+        summarizer=summarizer,
+    )
+    mic = _mic([SPEECH_FRAME, SILENCE_FRAME], trailing_silence=20)
+
+    _ = [c async for c in orchestrator.handle_voice_turn("u1", _persona(), mic)]
+    await orchestrator.wait_for_background_tasks()
+
+    assert summarizer.calls == [("u1", "mentor", 2)]  # both turns written first

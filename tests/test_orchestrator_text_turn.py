@@ -55,6 +55,12 @@ class _FakeMemoryStore(MemoryStore):
     async def delete(self, user_id: str, persona_id: str | None = None) -> None:
         raise NotImplementedError
 
+    async def list_turns(self, user_id: str, persona_id: str) -> list[Turn]:
+        return []
+
+    async def replace_turns(self, user_id, persona_id, old, new) -> bool:
+        return False
+
 
 class _FakeLLM(LLMBackend):
     def __init__(self, tokens: list[str]) -> None:

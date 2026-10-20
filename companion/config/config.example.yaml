@@ -146,7 +146,11 @@ memory:
   options:
     persist_dir: ./data/memory
   summarizer:
-    trigger_turn_count: 50           # RollingSummarizer itself is still unimplemented (companion/memory/summarizer.py)
+    # Once a persona's memory holds this many raw turns, the oldest half
+    # are summarized by the LLM into one summary turn, in the background
+    # after a turn (never delaying a reply). 0 or omitted = off. See
+    # docs/ROLLING_SUMMARIZER.md.
+    trigger_turn_count: 50
   # MemArk backend (experimental) — hybrid graph + recency/keyword
   # retrieval over a local SQLite-backed graph, in place of Chroma's flat
   # vector search. See docs/MEMARK_BACKEND.md (why/tradeoffs — notably:

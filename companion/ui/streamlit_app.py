@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import wave
 
 import numpy as np
@@ -55,6 +56,7 @@ from companion.app import (
     build_llm,
     build_memory,
     build_stt,
+    build_summarizer,
     build_tts_for_persona,
     build_vad,
     load_personas,
@@ -72,6 +74,8 @@ from companion.core.interfaces.types import Persona, Turn
 from companion.core.orchestrator import Orchestrator
 from companion.core.persona_loader import PersonaError
 from companion.core.prompt_builder import PromptBuilder
+
+logger = logging.getLogger(__name__)
 
 _STT_SAMPLE_RATE = 16_000  # must match companion/backends/stt/whisper_local.py's SAMPLE_RATE_HZ
 
@@ -108,6 +112,12 @@ def _shared_backends(_config: AppConfig) -> dict[str, object]:
         # None without an `agent:` config section; then every persona
         # chats through the plain LLM.
         "agent": build_agent(_config, memory),
+        # None when memory.summarizer is off. Not handed to Orchestrator:
+        # each turn here runs under its own asyncio.run, which would cancel
+        # a background task the moment the turn returns. _run_turn calls it
+        # itself after the reply has rendered (docs/ROLLING_SUMMARIZER.md
+        # section 5).
+        "summarizer": build_summarizer(_config, memory),
     }
 
 
@@ -249,6 +259,15 @@ def _process_message(
     recent_turns.append(Turn(role="user", text=message))
     if reply.strip():
         recent_turns.append(Turn(role="assistant", text=reply))
+
+    # After the reply (and speech) has rendered, so it never delays one.
+    # Cheap when nothing is due (one list_turns call).
+    summarizer = _shared_backends(config)["summarizer"]
+    if summarizer is not None:
+        try:
+            asyncio.run(summarizer.summarize_if_due(user_id, persona.id))
+        except Exception:  # memory upkeep must never break the chat
+            logger.exception("RollingSummarizer failed; memory left unsummarized")
 
 
 try:

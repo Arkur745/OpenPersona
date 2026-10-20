@@ -40,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import uuid
+from collections.abc import Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
@@ -55,6 +56,18 @@ _COLLECTION_PREFIX = "mem-"
 def _collection_name(user_id: str, persona_id: str) -> str:
     user_hash = hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:16]
     return f"{_COLLECTION_PREFIX}{user_hash}-{persona_id}"
+
+
+def _turn_from_chroma(document: str, metadata: dict) -> Turn:
+    return Turn(
+        role=metadata["role"],
+        text=document,
+        timestamp=datetime.fromisoformat(metadata["timestamp"]),
+    )
+
+
+def _turn_metadata(turn: Turn) -> dict[str, str]:
+    return {"role": turn.role, "timestamp": turn.timestamp.isoformat()}
 
 
 def _user_collection_prefix(user_id: str) -> str:
@@ -119,11 +132,7 @@ class VectorMemoryStore(MemoryStore):
             # this just maps straight through in the order given, no
             # re-sorting.
             return [
-                Turn(
-                    role=metadata["role"],
-                    text=document,
-                    timestamp=datetime.fromisoformat(metadata["timestamp"]),
-                )
+                _turn_from_chroma(document, metadata)
                 for document, metadata in zip(documents, metadatas)
             ]
 
@@ -135,12 +144,60 @@ class VectorMemoryStore(MemoryStore):
             collection.add(
                 ids=[str(uuid.uuid4())],
                 documents=[turn.text],
-                metadatas=[
-                    {"role": turn.role, "timestamp": turn.timestamp.isoformat()}
-                ],
+                metadatas=[_turn_metadata(turn)],
             )
 
         await asyncio.to_thread(_write)
+
+    async def list_turns(self, user_id: str, persona_id: str) -> list[Turn]:
+        def _list() -> list[Turn]:
+            collection = self._get_collection(user_id, persona_id)
+            results = collection.get(include=["documents", "metadatas"])
+            turns = [
+                _turn_from_chroma(document, metadata)
+                for document, metadata in zip(results["documents"], results["metadatas"])
+            ]
+            # get() returns insertion order, which isn't a timestamp
+            # guarantee — sort explicitly. sorted() is stable, so equal
+            # timestamps keep insertion order.
+            return sorted(turns, key=lambda turn: turn.timestamp)
+
+        return await asyncio.to_thread(_list)
+
+    async def replace_turns(
+        self, user_id: str, persona_id: str, old: Sequence[Turn], new: Turn
+    ) -> bool:
+        # One thread function for the whole check-add-delete, so cancelling
+        # the awaiting task (e.g. asyncio.run tearing down at session end)
+        # can't stop it halfway — see docs/ROLLING_SUMMARIZER.md section 5.
+        def _replace() -> bool:
+            collection = self._get_collection(user_id, persona_id)
+            results = collection.get(include=["documents", "metadatas"])
+            ids_by_turn: dict[Turn, list[str]] = {}
+            for turn_id, document, metadata in zip(
+                results["ids"], results["documents"], results["metadatas"]
+            ):
+                ids_by_turn.setdefault(_turn_from_chroma(document, metadata), []).append(
+                    turn_id
+                )
+            delete_ids: list[str] = []
+            for turn in old:
+                candidates = ids_by_turn.get(turn)
+                if not candidates:
+                    return False
+                delete_ids.append(candidates.pop())
+            # Chroma has no multi-call transaction: add before delete, so a
+            # crash in between leaves redundant memory, never lost memory.
+            collection.add(
+                ids=[str(uuid.uuid4())],
+                documents=[new.text],
+                metadatas=[_turn_metadata(new)],
+            )
+            if delete_ids:
+                collection.delete(ids=delete_ids)
+            return True
+
+        return await asyncio.to_thread(_replace)
 
     async def delete(self, user_id: str, persona_id: str | None = None) -> None:
         def _delete() -> None:

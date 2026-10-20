@@ -47,6 +47,12 @@ class _FakeMemory(MemoryStore):
     async def delete(self, user_id, persona_id=None):
         pass
 
+    async def list_turns(self, user_id, persona_id):
+        return []
+
+    async def replace_turns(self, user_id, persona_id, old, new):
+        return False
+
 
 def _ctx(tmp_path, user="u1", persona="p1", memory=None, now=NOW) -> ToolContext:
     return ToolContext(user_id=user, persona_id=persona, memory=memory or _FakeMemory(),

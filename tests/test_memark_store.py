@@ -448,13 +448,13 @@ async def test_save_node_does_not_block_the_event_loop(tmp_path, monkeypatch):
     exercised concurrently."""
     store = MemArkGraphStore(persist_dir=str(tmp_path))
 
-    real_save_node_sync = MemArkGraphStore._save_node_sync
+    real_save_node_sync = MemArkGraphStore.save_node_sync
 
     def slow_save_node_sync(self, user_id, persona_id, node):
         time.sleep(0.2)  # simulated slow disk I/O -- a real blocking call
         return real_save_node_sync(self, user_id, persona_id, node)
 
-    monkeypatch.setattr(MemArkGraphStore, "_save_node_sync", slow_save_node_sync)
+    monkeypatch.setattr(MemArkGraphStore, "save_node_sync", slow_save_node_sync)
 
     async def other_work() -> None:
         await asyncio.sleep(0.2)

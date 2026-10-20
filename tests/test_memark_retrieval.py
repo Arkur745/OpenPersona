@@ -120,10 +120,10 @@ async def test_write_failure_propagates_and_in_memory_mutation_stands(
 ):
     store = _store(tmp_path)
 
-    async def _raise(*args, **kwargs):
+    def _raise(*args, **kwargs):
         raise RuntimeError("simulated disk failure")
 
-    monkeypatch.setattr(MemArkGraphStore, "save_node", _raise)
+    monkeypatch.setattr(MemArkGraphStore, "save_node_sync", _raise)
 
     turn = Turn(role="user", text="I am allergic to peanuts")
     with pytest.raises(RuntimeError, match="simulated disk failure"):

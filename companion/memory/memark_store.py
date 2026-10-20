@@ -221,9 +221,10 @@ class MemArkGraphStore:
         # this store, like VectorMemoryStore, never has more than one
         # write in flight at a time for a given scope — each
         # `await asyncio.to_thread(...)` call completes before the next
-        # one starts. If concurrent-session handling (more than one
-        # write in flight at once for the same scope) is ever added,
-        # this assumption needs revisiting alongside it, not silently.
+        # one starts. A background RollingSummarizer is a second writer;
+        # MemArkMemoryStore serializes its writes and replace_turns()
+        # behind its own threading.Lock to keep this assumption true (see
+        # docs/ROLLING_SUMMARIZER.md section 6.2).
         self._connections: dict[tuple[str, str], sqlite3.Connection] = {}
         self._connections_lock = threading.Lock()
 
@@ -260,10 +261,42 @@ class MemArkGraphStore:
     # --- writes: async, to_thread-wrapped -------------------------------
 
     async def save_node(self, user_id: str, persona_id: str, node: MemArkNode) -> None:
-        await asyncio.to_thread(self._save_node_sync, user_id, persona_id, node)
+        await asyncio.to_thread(self.save_node_sync, user_id, persona_id, node)
 
-    def _save_node_sync(self, user_id: str, persona_id: str, node: MemArkNode) -> None:
+    def save_node_sync(self, user_id: str, persona_id: str, node: MemArkNode) -> None:
+        """Sync form of `save_node`, for a caller already running inside
+        `asyncio.to_thread` — `MemArkMemoryStore.write()` uses it so embed,
+        mutate and persist happen under one lock (docs/ROLLING_SUMMARIZER.md
+        section 6.2)."""
         conn = self._ensure_connection(user_id, persona_id)
+        self._insert_node(conn, node)
+        conn.commit()
+
+    def replace_nodes_sync(
+        self,
+        user_id: str,
+        persona_id: str,
+        delete_ids: list[str],
+        new_node: MemArkNode,
+    ) -> None:
+        """Insert `new_node` and delete the `delete_ids` node rows (plus any
+        edge touching them) in one SQLite transaction — a crash leaves all
+        of the change or none of it. Backs `MemArkMemoryStore
+        .replace_turns()`; see docs/ROLLING_SUMMARIZER.md section 6.2."""
+        conn = self._ensure_connection(user_id, persona_id)
+        placeholders = ",".join("?" for _ in delete_ids)
+        # `with conn:` commits on success and rolls back on any exception.
+        with conn:
+            self._insert_node(conn, new_node)
+            if delete_ids:
+                conn.execute(f"DELETE FROM nodes WHERE id IN ({placeholders})", delete_ids)
+                conn.execute(
+                    f"DELETE FROM edges WHERE source_node IN ({placeholders}) "
+                    f"OR target_node IN ({placeholders})",
+                    delete_ids + delete_ids,
+                )
+
+    def _insert_node(self, conn: sqlite3.Connection, node: MemArkNode) -> None:
         conn.execute(
             """
             INSERT OR REPLACE INTO nodes (
@@ -290,7 +323,6 @@ class MemArkGraphStore:
                 json.dumps(node.metadata),
             ),
         )
-        conn.commit()
 
     async def save_edge(self, user_id: str, persona_id: str, edge: MemArkEdge) -> None:
         await asyncio.to_thread(self._save_edge_sync, user_id, persona_id, edge)

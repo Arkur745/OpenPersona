@@ -302,6 +302,12 @@ class _FakeMemory(MemoryStore):
     async def delete(self, user_id: str, persona_id: str | None = None) -> None:
         raise NotImplementedError
 
+    async def list_turns(self, user_id: str, persona_id: str) -> list[Turn]:
+        return []
+
+    async def replace_turns(self, user_id, persona_id, old, new) -> bool:
+        return False
+
 
 def _scripted_input(messages: list[str]):
     it = iter(messages)

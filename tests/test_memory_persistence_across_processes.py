@@ -120,6 +120,36 @@ def test_delete_in_one_process_is_still_deleted_in_the_next(backend, tmp_path):
     assert results == []
 
 
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_summary_made_in_one_process_replaces_turns_for_the_next(backend, tmp_path):
+    """docs/ROLLING_SUMMARIZER.md section 7: write, summarize and read back
+    in three separate processes. The summarizer's LLM is a canned fake in
+    the child; the store and its files are real."""
+    turns = [
+        _turn("user", "My sister Maya signed up for the Berlin marathon", 0),
+        _turn("assistant", "That's exciting, how is her training going?", 1),
+        _turn("user", "She runs every morning before work", 2),
+        _turn("assistant", "Impressive discipline.", 3),
+        _turn("user", "I might fly over to watch her", 4),
+        _turn("assistant", "You should, it would mean a lot.", 5),
+    ]
+    _child("write", backend, tmp_path, turns=json.dumps(turns))
+
+    assert _child("summarize", backend, tmp_path, trigger=6) == {"ran": True}
+
+    stored = _child("list", backend, tmp_path)["turns"]
+    assert stored[0]["role"] == "system"
+    assert stored[0]["timestamp"] == turns[2]["timestamp"]
+    assert "Berlin marathon" in stored[0]["text"]
+    assert stored[1:] == turns[3:]
+
+    results = _child("query", backend, tmp_path, query="Maya Berlin marathon", k=5)["results"]
+    assert stored[0] in results
+
+    # A fourth process: nothing is due any more (3 raw turns, summary not counted).
+    assert _child("summarize", backend, tmp_path, trigger=6) == {"ran": False}
+
+
 # --- orchestrator level ---------------------------------------------------
 
 

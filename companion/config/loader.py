@@ -79,6 +79,9 @@ class AppConfig:
     # Optional `agent:` section (agentic personas). None = no agent: every
     # persona uses the plain LLM, tools or not.
     agent: BackendConfig | None = None
+    # `memory.summarizer.trigger_turn_count`. None (section missing, or 0)
+    # = no RollingSummarizer. See docs/ROLLING_SUMMARIZER.md section 5.
+    summarizer_trigger_turn_count: int | None = None
 
 
 def _require_section(data: dict, key: str, path: Path) -> dict:
@@ -139,6 +142,24 @@ def _llm_voice_override(data: dict, path: Path) -> dict[str, Any]:
     return _options(override, "llm.voice_mode_override", path)
 
 
+def _summarizer_trigger(data: dict, path: Path) -> int | None:
+    summarizer = data["memory"].get("summarizer")
+    if summarizer is None:
+        return None
+    if not isinstance(summarizer, dict):
+        raise ConfigError(
+            f"{path}: memory.summarizer must be a mapping, got {type(summarizer).__name__}"
+        )
+    value = summarizer.get("trigger_turn_count", 0)
+    # bool is an int subclass; `true` here is a typo, not a count.
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0 or value == 1:
+        raise ConfigError(
+            f"{path}: memory.summarizer.trigger_turn_count must be 0 (off) or "
+            f"an integer >= 2, got {value!r}"
+        )
+    return value or None
+
+
 def load_config(path: str | Path) -> AppConfig:
     """Parse and validate one config YAML file (`config.yaml` or
     `config.example.yaml`) into `AppConfig`."""
@@ -188,6 +209,7 @@ def load_config(path: str | Path) -> AppConfig:
         mode=mode,
         llm_voice_override=_llm_voice_override(data, path),
         agent=_backend_config(data, "agent", path) if data.get("agent") is not None else None,
+        summarizer_trigger_turn_count=_summarizer_trigger(data, path),
     )
 
 

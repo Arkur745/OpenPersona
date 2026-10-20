@@ -61,6 +61,7 @@ from companion.core.orchestrator import Orchestrator
 from companion.core.persona_loader import PersonaLoader
 from companion.core.prompt_builder import PromptBuilder
 from companion.memory.store import VectorMemoryStore
+from companion.memory.summarizer import RollingSummarizer
 from companion.tools.registry import validate_persona_tools
 from companion.tools.store import ToolStore
 
@@ -140,6 +141,20 @@ def build_memory(config: AppConfig) -> MemoryStore:
     # for anything but "chroma" (see companion/memory/store.py) — reused
     # rather than duplicating that check here.
     return VectorMemoryStore(backend=config.memory.backend, **config.memory.options)
+
+
+def build_summarizer(config: AppConfig, memory: MemoryStore) -> RollingSummarizer | None:
+    """None when `memory.summarizer.trigger_turn_count` is missing or 0.
+    Gets its own LLM instance built from the base `llm.options`, never with
+    `voice_mode_override` applied: those options exist to keep spoken
+    replies short and would cut a summary off (docs/ROLLING_SUMMARIZER.md
+    section 4)."""
+    if config.summarizer_trigger_turn_count is None:
+        return None
+    llm = _build_single_backend(config.llm, "ollama", OllamaLLM, "llm")
+    return RollingSummarizer(
+        memory=memory, llm=llm, trigger_turn_count=config.summarizer_trigger_turn_count
+    )
 
 
 def build_tts_for_persona(config: AppConfig, persona: Persona) -> TextToSpeech:
@@ -250,6 +265,7 @@ def build_orchestrator(config: AppConfig, persona: Persona) -> Orchestrator:
         memory=memory,
         prompt_builder=PromptBuilder(),
         agent=build_agent(config, memory),
+        summarizer=build_summarizer(config, memory),
     )
 
 

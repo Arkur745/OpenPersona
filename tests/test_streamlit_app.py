@@ -49,6 +49,12 @@ class _FakeMemory(MemoryStore):
     async def delete(self, user_id, persona_id=None):
         pass
 
+    async def list_turns(self, user_id, persona_id):
+        return []
+
+    async def replace_turns(self, user_id, persona_id, old, new):
+        return False
+
 
 @pytest.fixture
 def fake_backends(monkeypatch):

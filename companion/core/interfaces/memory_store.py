@@ -2,6 +2,7 @@
 implementation (Chroma/LanceDB)."""
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 
 from companion.core.interfaces.types import Turn
 
@@ -52,5 +53,30 @@ class MemoryStore(ABC):
         omitted, wipe everything stored for the user across all personas.
         This backs the user-facing memory-deletion requirement — it must be
         a real, complete erasure, not a soft/tombstone delete.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def list_turns(self, user_id: str, persona_id: str) -> list[Turn]:
+        """Every stored turn for this user+persona, oldest first (by
+        `Turn.timestamp`). Empty if nothing is stored.
+
+        Used by `companion.memory.summarizer.RollingSummarizer` to find the
+        oldest turns — see docs/ROLLING_SUMMARIZER.md.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def replace_turns(
+        self, user_id: str, persona_id: str, old: Sequence[Turn], new: Turn
+    ) -> bool:
+        """Store `new` and remove every stored turn equal to one in `old`,
+        as one operation. Turns are matched by `Turn` equality (role, text,
+        timestamp), the same identity the orchestrator's dedup relies on.
+
+        All-or-nothing on `old`: if any turn in it is no longer stored
+        (e.g. `delete()` ran while a summary was being generated), change
+        nothing and return False — a summary must never write back memory
+        the user just erased. Returns True if the replacement happened.
         """
         raise NotImplementedError

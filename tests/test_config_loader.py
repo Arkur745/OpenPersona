@@ -7,6 +7,7 @@ scope here is deliberately narrower than persona validation (structure,
 not `options:` contents).
 """
 
+import copy
 from pathlib import Path
 
 import pytest
@@ -64,6 +65,7 @@ def test_loads_the_real_config_example_yaml():
     assert config.audio.options["sample_rate"] == 16000
     assert config.mode == "text"
     assert config.llm_voice_override == {"model": "qwen2.5:3b-instruct"}
+    assert config.summarizer_trigger_turn_count == 50
 
 
 def test_valid_config_parses_all_sections(tmp_path):
@@ -276,3 +278,40 @@ def test_real_config_example_enables_the_agent_offline():
     assert agent.backend == "langgraph"
     assert agent.options["model"] == "qwen2.5:7b-instruct"
     assert agent.options["allow_network"] is False
+
+
+# --- memory.summarizer (docs/ROLLING_SUMMARIZER.md section 5) ---------------
+
+
+def _with_summarizer(summarizer) -> dict:
+    data = copy.deepcopy(VALID_CONFIG)
+    data["memory"]["summarizer"] = summarizer
+    return data
+
+
+def test_summarizer_absent_means_off(tmp_path):
+    config = load_config(_write_config(tmp_path, VALID_CONFIG))
+    assert config.summarizer_trigger_turn_count is None
+
+
+def test_summarizer_zero_means_off(tmp_path):
+    path = _write_config(tmp_path, _with_summarizer({"trigger_turn_count": 0}))
+    assert load_config(path).summarizer_trigger_turn_count is None
+
+
+def test_summarizer_trigger_parsed(tmp_path):
+    path = _write_config(tmp_path, _with_summarizer({"trigger_turn_count": 12}))
+    assert load_config(path).summarizer_trigger_turn_count == 12
+
+
+@pytest.mark.parametrize("bad", [-1, 1, "50", True, 2.5])
+def test_summarizer_bad_trigger_rejected(tmp_path, bad):
+    path = _write_config(tmp_path, _with_summarizer({"trigger_turn_count": bad}))
+    with pytest.raises(ConfigError, match="memory.summarizer.trigger_turn_count"):
+        load_config(path)
+
+
+def test_summarizer_not_a_mapping_rejected(tmp_path):
+    path = _write_config(tmp_path, _with_summarizer(50))
+    with pytest.raises(ConfigError, match="memory.summarizer must be a mapping"):
+        load_config(path)

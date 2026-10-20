@@ -69,6 +69,12 @@ class _NoMemory(MemoryStore):
     async def delete(self, user_id, persona_id=None):
         pass
 
+    async def list_turns(self, user_id, persona_id):
+        return []
+
+    async def replace_turns(self, user_id, persona_id, old, new):
+        return False
+
 
 def _persona(*tools: str) -> Persona:
     return Persona(id="planner", name="Planner", tone="Brisk.", boundaries="None.",

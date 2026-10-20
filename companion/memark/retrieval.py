@@ -47,6 +47,9 @@ file):
 from __future__ import annotations
 
 import asyncio
+import threading
+import uuid
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -119,6 +122,15 @@ class MemArkMemoryStore(MemoryStore):
         self._embedding_function = embedding_function
         self._embedding_dim: int | None = None
         self._scopes: dict[tuple[str, str], _Scope] = {}
+        # Serializes write()/replace_turns()/delete() across threads. A
+        # background RollingSummarizer makes replace_turns() a second
+        # writer that can run alongside a turn's write(), and both the
+        # in-memory graph and MemArkGraphStore's shared SQLite connection
+        # assume one writer at a time. A threading.Lock (not asyncio.Lock)
+        # because each body runs in an asyncio.to_thread worker, and
+        # Streamlit drives successive calls from different event loops.
+        # See docs/ROLLING_SUMMARIZER.md section 6.2.
+        self._lock = threading.Lock()
 
     # --- embedding --------------------------------------------------
 
@@ -237,32 +249,29 @@ class MemArkMemoryStore(MemoryStore):
         )
 
     # --- write --------------------------------------------------------
-    # Two sequential awaited steps, not one combined asyncio.to_thread
-    # call as the design note's own text originally suggested. Found
-    # while implementing: MemArkGraphStore.save_node() is itself already
-    # async (to_thread-wrapped internally) -- awaiting it from inside a
-    # plain sync function dispatched via to_thread isn't possible without
-    # either modifying MemArkGraphStore (out of scope for this pass) or
-    # reaching into its private _save_node_sync (poor coupling to
-    # something explicitly off-limits to touch). Two sequential awaits
-    # preserve the exact same ordering guarantee the design note wanted
-    # (embed+mutate always completes before persist starts, never
-    # concurrently) -- `await` serializes them either way -- so nothing
-    # about the ordering-safety reasoning is actually lost.
+    # One asyncio.to_thread call: embed + in-memory mutate + persist, all
+    # under self._lock (docs/ROLLING_SUMMARIZER.md section 6.2). An earlier
+    # pass used two awaits (to_thread mutate, then the async save_node())
+    # to avoid calling MemArkGraphStore's then-private sync save; the
+    # summarizer pass made that sync save public (save_node_sync) because
+    # the lock has to cover both steps. Ordering is unchanged: mutate
+    # always completes before persist starts.
 
     async def write(self, user_id: str, persona_id: str, turn: Turn) -> None:
-        _node_id, persist_node = await asyncio.to_thread(
-            self._embed_and_mutate, user_id, persona_id, turn
-        )
-        # If this raises, the in-memory mutation above already stands --
-        # deliberate, per docs/MEMARK_RETRIEVAL_ADAPTER.md section 8:
-        # GraphMemoryManager has no supported node-removal API (confirmed
-        # by auditing its full method list), and MemoryRepository
-        # .remove_node() -- which looks like one -- only removes the node
-        # from the networkx graph, not from .nodes, so using it would
-        # leave a WORSE inconsistency than not calling it at all. Not
-        # caught here; propagates to the caller unswallowed.
-        await self._graph_store.save_node(user_id, persona_id, persist_node)
+        await asyncio.to_thread(self._write_sync, user_id, persona_id, turn)
+
+    def _write_sync(self, user_id: str, persona_id: str, turn: Turn) -> None:
+        with self._lock:
+            _node_id, persist_node = self._embed_and_mutate(user_id, persona_id, turn)
+            # If this raises, the in-memory mutation above already stands --
+            # deliberate, per docs/MEMARK_RETRIEVAL_ADAPTER.md section 8:
+            # GraphMemoryManager has no supported node-removal API (confirmed
+            # by auditing its full method list), and MemoryRepository
+            # .remove_node() -- which looks like one -- only removes the node
+            # from the networkx graph, not from .nodes, so using it would
+            # leave a WORSE inconsistency than not calling it at all. Not
+            # caught here; propagates to the caller unswallowed.
+            self._graph_store.save_node_sync(user_id, persona_id, persist_node)
 
     def _embed_and_mutate(
         self, user_id: str, persona_id: str, turn: Turn
@@ -334,6 +343,12 @@ class MemArkMemoryStore(MemoryStore):
     def _query_sync(
         self, user_id: str, persona_id: str, query: str, k: int
     ) -> list[Turn]:
+        with self._lock:
+            return self._query_locked(user_id, persona_id, query, k)
+
+    def _query_locked(
+        self, user_id: str, persona_id: str, query: str, k: int
+    ) -> list[Turn]:
         scope = self._ensure_scope(user_id, persona_id)
         query_embedding = self._embed(query)
 
@@ -348,13 +363,7 @@ class MemArkMemoryStore(MemoryStore):
             node = scope.manager.get_node(node_id)
             if node is None:
                 continue
-            turns.append(
-                Turn(
-                    role=node.metadata.get("role", "user"),
-                    text=node.summary,
-                    timestamp=node.timestamp_created,
-                )
-            )
+            turns.append(self._node_turn(node))
         return turns
 
     def _graph_retrieval_scores(
@@ -463,6 +472,81 @@ class MemArkMemoryStore(MemoryStore):
             return {node_id: 1.0 for node_id in scores}
         return {node_id: (score - lo) / (hi - lo) for node_id, score in scores.items()}
 
+    # --- list / replace (RollingSummarizer) --------------------------
+    # See docs/ROLLING_SUMMARIZER.md section 6.2. Only episodic nodes are
+    # turns; a summary turn is an episodic node with role "system", not
+    # MemArk's own "summary" node type, because _fallback_scores scans only
+    # episodic nodes and a "summary" node would never be retrieved.
+
+    @staticmethod
+    def _node_turn(node: Any) -> Turn:
+        return Turn(
+            role=node.metadata.get("role", "user"),
+            text=node.summary,
+            timestamp=node.timestamp_created,
+        )
+
+    async def list_turns(self, user_id: str, persona_id: str) -> list[Turn]:
+        return await asyncio.to_thread(self._list_turns_sync, user_id, persona_id)
+
+    def _list_turns_sync(self, user_id: str, persona_id: str) -> list[Turn]:
+        with self._lock:
+            scope = self._ensure_scope(user_id, persona_id)
+            turns = [
+                self._node_turn(node)
+                for node in scope.manager.nodes.values()
+                if node.node_type == _EPISODIC_NODE_TYPE
+            ]
+        return sorted(turns, key=lambda turn: turn.timestamp)
+
+    async def replace_turns(
+        self, user_id: str, persona_id: str, old: Sequence[Turn], new: Turn
+    ) -> bool:
+        return await asyncio.to_thread(
+            self._replace_turns_sync, user_id, persona_id, list(old), new
+        )
+
+    def _replace_turns_sync(
+        self, user_id: str, persona_id: str, old: list[Turn], new: Turn
+    ) -> bool:
+        with self._lock:
+            scope = self._ensure_scope(user_id, persona_id)
+            ids_by_turn: dict[Turn, list[str]] = {}
+            for node_id, node in scope.manager.nodes.items():
+                if node.node_type == _EPISODIC_NODE_TYPE:
+                    ids_by_turn.setdefault(self._node_turn(node), []).append(node_id)
+            delete_ids: list[str] = []
+            for turn in old:
+                candidates = ids_by_turn.get(turn)
+                if not candidates:
+                    return False
+                delete_ids.append(candidates.pop())
+
+            embedding = self._embed(new.text)
+            new_node = MemArkNode(
+                id=str(uuid.uuid4()),
+                node_type=_EPISODIC_NODE_TYPE,
+                summary=new.text,
+                embedding=embedding,
+                timestamp_created=new.timestamp,
+                timestamp_updated=new.timestamp,
+                importance_score=0.5,
+                salience_score=0.5,  # MemoryNode's own defaults
+                confidence_score=1.0,
+                retrieval_count=0,
+                last_accessed=new.timestamp,
+                parent_id=None,
+                child_ids=[],
+                raw_conversation_refs=[],
+                metadata={"role": new.role},
+            )
+            self._graph_store.replace_nodes_sync(user_id, persona_id, delete_ids, new_node)
+            # Same reasoning as delete() below: GraphMemoryManager has no
+            # supported single-node removal, so drop the whole scope and let
+            # it re-hydrate from SQLite (now the truth) on next use.
+            self._scopes.pop((user_id, persona_id), None)
+            return True
+
     # --- delete -----------------------------------------------------
     # Out of scope for docs/MEMARK_RETRIEVAL_ADAPTER.md's original
     # query()/write()-only pass; implemented in a later pass, matching
@@ -484,9 +568,10 @@ class MemArkMemoryStore(MemoryStore):
         await asyncio.to_thread(self._delete_sync, user_id, persona_id)
 
     def _delete_sync(self, user_id: str, persona_id: str | None) -> None:
-        self._graph_store.delete(user_id, persona_id)
-        if persona_id is not None:
-            self._scopes.pop((user_id, persona_id), None)
-            return
-        for key in [k for k in self._scopes if k[0] == user_id]:
-            del self._scopes[key]
+        with self._lock:
+            self._graph_store.delete(user_id, persona_id)
+            if persona_id is not None:
+                self._scopes.pop((user_id, persona_id), None)
+                return
+            for key in [k for k in self._scopes if k[0] == user_id]:
+                del self._scopes[key]

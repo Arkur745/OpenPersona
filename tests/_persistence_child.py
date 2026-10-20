@@ -37,6 +37,7 @@ from companion.core.orchestrator import Orchestrator
 from companion.core.prompt_builder import PromptBuilder
 
 CANNED_REPLY = "Noted."
+CANNED_SUMMARY = "The user's sister Maya is training for the Berlin marathon."
 
 
 def _turn_to_json(turn: Turn) -> dict:
@@ -62,6 +63,13 @@ class _RecordingLLM(LLMBackend):
         yield CANNED_REPLY
 
 
+class _SummaryLLM(LLMBackend):
+    """Stands in for Ollama in the summarize command: a fixed summary."""
+
+    async def generate_stream(self, prompt: str, context: list[Turn]):
+        yield CANNED_SUMMARY
+
+
 def _build_store(args: argparse.Namespace):
     config = SimpleNamespace(
         memory=BackendConfig(backend=args.backend, options={"persist_dir": args.persist_dir})
@@ -79,6 +87,13 @@ async def _run(args: argparse.Namespace) -> dict:
     if args.command == "query":
         results = await store.query(args.user, args.persona, args.query, k=args.k)
         return {"results": [_turn_to_json(t) for t in results]}
+    if args.command == "list":
+        return {"turns": [_turn_to_json(t) for t in await store.list_turns(args.user, args.persona)]}
+    if args.command == "summarize":
+        from companion.memory.summarizer import RollingSummarizer
+
+        summarizer = RollingSummarizer(store, _SummaryLLM(), trigger_turn_count=args.trigger)
+        return {"ran": await summarizer.summarize_if_due(args.user, args.persona)}
     if args.command == "delete":
         await store.delete(args.user, args.persona)
         return {"deleted": True}
@@ -133,7 +148,8 @@ async def _run(args: argparse.Namespace) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("command",
-                        choices=["write", "query", "delete", "chat", "add-note", "search-notes"])
+                        choices=["write", "query", "delete", "chat", "add-note", "search-notes",
+                                 "list", "summarize"])
     parser.add_argument("--backend", required=True, choices=["chroma", "memark"])
     parser.add_argument("--persist-dir", required=True)
     parser.add_argument("--user", default="u1")
@@ -142,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--query", default="")
     parser.add_argument("--k", type=int, default=5)
     parser.add_argument("--message", default="")
+    parser.add_argument("--trigger", type=int, default=50, help="for summarize")
     args = parser.parse_args(argv)
     print(json.dumps(asyncio.run(_run(args))))
     return 0

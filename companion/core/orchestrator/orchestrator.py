@@ -17,7 +17,7 @@ import asyncio
 import contextlib
 import logging
 import re
-from typing import AsyncIterator, Awaitable, Callable
+from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable
 
 from companion.core.agent import (
     DEFAULT_FILLER_PHRASES,
@@ -45,6 +45,9 @@ from companion.core.prompt_builder.prompt_builder import BuiltPrompt, PromptBuil
 # text mode's CLI loop or voice mode's, so it shouldn't decide how a
 # diagnostic gets displayed, only that one gets emitted. See
 # _write_turn_safely for the one thing that currently logs here.
+if TYPE_CHECKING:
+    from companion.memory.summarizer import RollingSummarizer
+
 logger = logging.getLogger(__name__)
 
 # Matches through a sentence-ending punctuation run and any trailing
@@ -160,6 +163,7 @@ class Orchestrator:
         prompt_builder: PromptBuilder,
         agent: AgentRunner | None = None,
         agent_voice_timeout_s: float = 20.0,
+        summarizer: "RollingSummarizer | None" = None,
     ) -> None:
         self.stt = stt
         self.tts = tts
@@ -175,6 +179,11 @@ class Orchestrator:
         # waiting and answer from the plain LLM (see _sentences_from_agent).
         self.agent_voice_timeout_s = agent_voice_timeout_s
         self._filler_index = 0
+        # Optional too: None means memory is never summarized. When set,
+        # each turn schedules summarizer.summarize_if_due as a background
+        # task (see _schedule_summarization).
+        self.summarizer = summarizer
+        self._summary_tasks: dict[tuple[str, str], asyncio.Task] = {}
 
     async def handle_text_turn(
         self,
@@ -236,8 +245,52 @@ class Orchestrator:
             await self._write_turn_safely(
                 user_id, persona.id, Turn(role="assistant", text=reply.strip())
             )
+        self._schedule_summarization(user_id, persona.id)
 
         return reply
+
+    def _schedule_summarization(self, user_id: str, persona_id: str) -> None:
+        """Start `summarizer.summarize_if_due` as a background task, after a
+        turn's memory writes — never awaited by the turn, so a summary's LLM
+        time can't delay a reply. At most one task per scope runs at a time;
+        a trigger while one is running is skipped (the running one already
+        sees the latest turns, and the next turn re-checks). Failures are
+        logged, never raised into the conversation, same policy as
+        `_write_turn_safely`. See docs/ROLLING_SUMMARIZER.md section 5.
+
+        If the event loop ends first (session over), the task is cancelled.
+        That's safe: each backend's `replace_turns` runs in one thread call,
+        so a summary is either fully stored or not started; it's retried on
+        the next session's first turn.
+        """
+        if self.summarizer is None:
+            return
+        key = (user_id, persona_id)
+        running = self._summary_tasks.get(key)
+        if running is not None and not running.done():
+            return
+        task = asyncio.create_task(self._run_summarizer(user_id, persona_id))
+        # Holding the reference also keeps the task from being
+        # garbage-collected mid-run (asyncio only keeps weak references).
+        self._summary_tasks[key] = task
+
+    async def _run_summarizer(self, user_id: str, persona_id: str) -> None:
+        try:
+            await self.summarizer.summarize_if_due(user_id, persona_id)
+        except Exception:
+            logger.exception(
+                "RollingSummarizer failed (user_id=%s, persona_id=%s); memory "
+                "left unsummarized, will retry after a later turn",
+                user_id,
+                persona_id,
+            )
+
+    async def wait_for_background_tasks(self) -> None:
+        """Await any running summarization tasks. For tests and for callers
+        that want a clean shutdown; the conversation paths never call it."""
+        tasks = [t for t in self._summary_tasks.values() if not t.done()]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _write_turn_safely(self, user_id: str, persona_id: str, turn: Turn) -> None:
         """Writes one turn to `MemoryStore`, catching a backend's
@@ -729,6 +782,7 @@ class Orchestrator:
                     recent_turns.append(assistant_turn)
                     _trim_to_last(recent_turns, max_recent)
                     await self._write_turn_safely(user_id, persona.id, assistant_turn)
+                self._schedule_summarization(user_id, persona.id)
 
                 # -> [interrupted -> listening] or [finished -> listening]: loop.
         finally:
