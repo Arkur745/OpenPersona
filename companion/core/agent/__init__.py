@@ -39,6 +39,10 @@ class ToolStarted:
 class ToolFinished:
     name: str
     ok: bool
+    # When `ok` is False: the error the tool returned, shown to the user by
+    # the CLI and Streamlit. A model can claim success after a failed tool
+    # call; surfacing the error keeps that visible.
+    detail: str = ""
 
 
 AgentEvent = TextDelta | ToolStarted | ToolFinished

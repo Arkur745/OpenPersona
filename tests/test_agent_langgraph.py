@@ -133,9 +133,12 @@ async def test_bad_tool_arguments_go_back_to_the_model_as_an_error(tmp_path):
 
     events = await _run(agent, _persona("reminders"))
 
-    assert events[1] == ToolFinished("set_reminder", ok=False)
+    assert events[1] == ToolFinished("set_reminder", ok=False,
+                                     detail="Give exactly one of minutes_from_now or at. For "
+                                     "'in 5 minutes' pass minutes_from_now=5; for a clock time "
+                                     "pass at='2026-10-20T17:00'.")
     assert events[-1] == TextDelta("When should I remind you?")
-    assert model.seen[1][-1].content == "Error: Give exactly one of minutes_from_now or at."
+    assert model.seen[1][-1].content.startswith("Error: Give exactly one of minutes_from_now or at.")
 
 
 async def test_hitting_max_steps_gives_an_apology_not_an_exception(tmp_path):
@@ -160,7 +163,7 @@ async def test_tool_timeout_is_reported_to_the_model(tmp_path, monkeypatch):
 
     events = await _run(agent, _persona("notes"))
 
-    assert ToolFinished("add_note", ok=False) in events
+    assert ToolFinished("add_note", ok=False, detail="add_note timed out after 0.05s.") in events
     assert model.seen[1][-1].content == "Error: add_note timed out after 0.05s."
 
 
@@ -196,3 +199,34 @@ async def test_real_qwen_uses_the_calculator(tmp_path):
     assert ToolStarted("calculate") in events
     answer = "".join(e.text for e in events if isinstance(e, TextDelta))
     assert "397.8" in answer
+
+
+async def test_malformed_tool_call_is_not_announced(tmp_path, caplog):
+    """A tool call that can't be parsed never runs, so it must not show up
+    as "(using ...)", which is what made a reminder look set when it wasn't."""
+    bad = AIMessage(content="", invalid_tool_calls=[
+        {"name": "set_reminder", "args": "{not json", "id": "x1", "error": "bad json",
+         "type": "invalid_tool_call"}])
+    agent, _ = _agent(tmp_path, [bad])
+
+    with caplog.at_level("WARNING"):
+        events = await _run(agent, _persona("reminders"))
+
+    assert not any(isinstance(e, ToolStarted) for e in events)
+    assert "malformed tool call" in caplog.text
+    assert ToolStore(tmp_path).pending_reminders("u1") == []
+
+
+async def test_text_alongside_a_tool_call_is_not_streamed_as_the_answer(tmp_path):
+    """Narration in the same model step as a tool call ("I'll use the
+    calculator") isn't part of the answer, and in voice mode it would be
+    spoken."""
+    narrated_call = AIMessage(
+        content="Sure! I'll use the calculator for this one.",
+        tool_calls=[{"name": "calculate", "args": {"expression": "0.23 * 1875"}, "id": "c1"}],
+    )
+    agent, _ = _agent(tmp_path, [narrated_call, AIMessage("23% of 1,875 is 431.25.")])
+
+    events = await _run(agent, _persona("calculator"))
+
+    assert [e.text for e in events if isinstance(e, TextDelta)] == ["23% of 1,875 is 431.25."]

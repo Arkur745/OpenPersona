@@ -206,15 +206,17 @@ def _process_message(
         # Tool activity (agentic personas) shows up in a collapsible status
         # box as it happens; it only appears once a tool is actually used.
         status_box = None
+        tool_failed = False
 
         def show_agent_event(event: AgentEvent) -> None:
-            nonlocal status_box
+            nonlocal status_box, tool_failed
             if isinstance(event, ToolStarted):
                 if status_box is None:
                     status_box = st.status("Using tools...", expanded=False)
                 status_box.write(f"🔧 {event.name}")
             elif isinstance(event, ToolFinished) and not event.ok and status_box is not None:
-                status_box.write(f"⚠️ {event.name} reported a problem")
+                tool_failed = True
+                status_box.write(f"⚠️ {event.name} reported a problem: {event.detail}")
 
         with st.spinner("Thinking..."):
             try:
@@ -228,7 +230,13 @@ def _process_message(
                     )
                 )
                 if status_box is not None:
-                    status_box.update(label="Used tools", state="complete")
+                    if tool_failed:
+                        # Expanded, so a failure is visible even if the
+                        # reply claims the action worked.
+                        status_box.update(label="A tool reported a problem",
+                                          state="error", expanded=True)
+                    else:
+                        status_box.update(label="Used tools", state="complete")
             except Exception as exc:  # noqa: BLE001 — see below
                 # Same "fail loudly, not silently" posture as every other
                 # entry point in this project (__main__.py's top-level

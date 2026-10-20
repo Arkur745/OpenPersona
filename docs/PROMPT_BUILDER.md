@@ -172,6 +172,24 @@ count against, not a v1 requirement.
   the alternatives (excluding a recency window from indexing, or adding
   an exclude parameter to `MemoryStore.query()`).
 
+## Later addition: tool-use rules (2026-10-20)
+
+For a persona with `tools:`, `build()` appends a fixed "How to use your
+tools" section as the **last** section of the prompt, after the memories.
+It says:
+- act when asked;
+- only claim what this turn's tool results confirm;
+- handle `Error:` results;
+- don't announce tools;
+- plain text, no LaTeX.
+
+The memory section's heading now also says remembered actions happened
+in the past. Personas without tools get neither change. The order was
+measured: rules after memories stopped the model copying remembered "Got
+it, reminder set" replies. See `docs/ARCHITECTURE.md`, "Agentic personas",
+for the numbers. This keeps PromptBuilder the only place prompt text is
+assembled.
+
 ## Decisions (confirmed)
 
 1. Option A — `PromptBuilder` stays pure, receives `retrieved_memory` as

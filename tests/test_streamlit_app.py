@@ -132,3 +132,27 @@ def test_tool_use_is_shown_for_a_persona_with_tools(fake_backends, monkeypatch):
     assert any(c.value.startswith("Tools: ") for c in at.caption)
     assert "It's Monday." in [m.value for m in at.markdown]
     assert "🔧 get_datetime" in [m.value for m in at.markdown]
+
+
+class _FailingAgent(_FakeAgent):
+    async def run_stream(self, persona, user_id, built):
+        from companion.core.agent import TextDelta, ToolFinished, ToolStarted
+
+        yield ToolStarted("set_reminder")
+        yield ToolFinished("set_reminder", ok=False, detail="time is in the past")
+        yield TextDelta("Reminder set!")
+
+
+def test_tool_failure_stays_visible(fake_backends, monkeypatch):
+    from companion import app
+
+    monkeypatch.setattr(app, "build_agent", lambda config, memory: _FailingAgent())
+    at = AppTest.from_file(APP_PATH, default_timeout=30)
+    at.run()
+    at.sidebar.selectbox[0].set_value("planner").run()
+
+    at.chat_input[0].set_value("Remind me at 5pm yesterday").run()
+
+    assert not at.exception, at.exception
+    assert "⚠️ set_reminder reported a problem: time is in the past" in [m.value for m in at.markdown]
+    assert at.status[0].label == "A tool reported a problem"

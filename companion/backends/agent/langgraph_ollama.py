@@ -95,8 +95,10 @@ class LangGraphOllamaAgent:
             try:
                 return await asyncio.wait_for(tool.func(**kwargs), self.tool_timeout_s)
             except ToolInputError as exc:
+                logger.info("tool %s rejected %s: %s", tool.name, kwargs, exc)
                 return f"Error: {exc}"
             except TimeoutError:
+                logger.warning("tool %s timed out (%s)", tool.name, kwargs)
                 return f"Error: {tool.name} timed out after {self.tool_timeout_s:g}s."
             except Exception:
                 logger.exception("tool %s failed", tool.name)
@@ -134,21 +136,32 @@ class LangGraphOllamaAgent:
                 {"messages": self._messages(built)}, config=config, stream_mode="messages"
             ):
                 if isinstance(chunk, ToolMessage):
-                    yield ToolFinished(chunk.name or "tool", ok=chunk.status != "error"
-                                       and not str(chunk.content).startswith("Error:"))
+                    content = str(chunk.content)
+                    ok = chunk.status != "error" and not content.startswith("Error:")
+                    yield ToolFinished(chunk.name or "tool", ok=ok,
+                                       detail="" if ok else content.removeprefix("Error: "))
                     continue
                 if not isinstance(chunk, AIMessage) or meta.get("langgraph_node") != "model":
                     continue
-                # A streaming model sends AIMessageChunks (tool calls arrive as
-                # tool_call_chunks); a non-streaming one sends whole AIMessages.
-                calls = (chunk.tool_call_chunks if isinstance(chunk, AIMessageChunk)
-                         else chunk.tool_calls) or []
+                # Announce only parsed, valid calls (`tool_calls`), never raw
+                # `tool_call_chunks`: a malformed call shows up in the stream
+                # but never runs, and announcing it made the CLI print
+                # "(using set_reminder...)" for a reminder that was never
+                # set. Ollama delivers each call whole, in one chunk, so this
+                # costs the voice filler no latency.
+                calls = chunk.tool_calls or []
+                for bad in chunk.invalid_tool_calls or []:
+                    logger.warning("agent for %s produced a malformed tool call: %s",
+                                   persona.id, bad)
+                pending_call = bool(calls or chunk.invalid_tool_calls
+                                    or (isinstance(chunk, AIMessageChunk)
+                                        and chunk.tool_call_chunks))
                 for call in calls:
                     key = call.get("id") or call.get("name")
                     if call.get("name") and key not in announced:
                         announced.add(key)
                         yield ToolStarted(call["name"])
-                if chunk.content and not calls:
+                if chunk.content and not pending_call:
                     yield TextDelta(chunk.text)
         except GraphRecursionError:
             logger.warning("agent for %s hit max_steps=%d", persona.id, self.max_steps)

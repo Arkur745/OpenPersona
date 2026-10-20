@@ -8,7 +8,7 @@ MemArk memory, and rolling summarization. This document describes how it
 works as built (last reviewed 2026-10-19). Cloud backends, hosted infra
 and auth/billing don't belong in this repo: the deployed version is a
 separate project. See "Build order" below. The reasons behind the
-main choices are collected in `DECISIONS.md` at the repo root (D1–D31);
+main choices are collected in `DECISIONS.md` at the repo root (D1–D32);
 this document describes the mechanics.
 
 ## Principles
@@ -908,6 +908,40 @@ Design note, including the reasoning this follows: `docs/AGENTIC_TOOLS.md`.
 - `companion/app.py`: `build_agent` (from config's optional `agent:`
   section), tool-name validation in `load_personas` (an unknown name fails
   at startup, naming the persona), and `take_due_reminders`.
+
+**Tool-use rules in the prompt.** For a persona with tools,
+`PromptBuilder` appends a short "How to use your tools" section **after**
+the memories:
+- act when asked, without asking permission or announcing the tool first;
+- only claim what a tool result in this turn confirms;
+- react to `Error:` results;
+- plain text, no LaTeX.
+
+The memory heading also says past actions happened then, not now. Each
+rule fixes a failure seen in manual testing on 2026-10-20 with
+qwen2.5:7b:
+- copying a remembered "Got it, reminder set" reply instead of calling
+  the tool;
+- asking "shall I save this?";
+- narrating before the calculator;
+- LaTeX.
+
+The order was measured against the user's real memory: with the rules
+before the memories, 3 of 5 runs actually stored the reminder; with them
+after, 10 of 10. Tool descriptions also say *when* to use each tool,
+e.g. `add_note` on "note that…", which took the Mentor from 0/5 to 5/5.
+
+**Only real tool calls are announced, and failures are shown.** The
+runner emits `ToolStarted` from parsed, valid calls (`tool_calls`), never
+from raw `tool_call_chunks`. A malformed call is logged and never
+announced, because it never runs; announcing it once made the CLI print
+"(using set_reminder...)" for a reminder that was never set.
+`ToolFinished` carries the error text (`detail`). The CLI prints
+"(<tool> reported a problem: …)" and Streamlit opens the status box as
+"A tool reported a problem", so a failure stays visible even if the
+model's reply claims success. Narration streamed *before* a tool call
+can't be held back without losing streaming; the prompt rule is what
+prevents it (0/12 runs after the fix).
 
 **Orchestrator.** One optional constructor argument, `agent`. A persona
 the agent `handles()` (at least one tool enabled under this config) goes

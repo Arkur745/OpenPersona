@@ -611,3 +611,27 @@ async def test_text_loop_prints_due_reminders_while_idle_and_tool_use():
     assert "\n⏰ Reminder: Stretch\n" in printed
     assert "  (using set_reminder...)" in printed
     assert "The Old Mentor> Done.\n" in printed
+
+
+async def test_text_loop_shows_a_failed_tool_even_if_the_reply_claims_success():
+    from companion.core.agent import TextDelta, ToolFinished, ToolStarted
+
+    class _Agent:
+        def handles(self, persona):
+            return True
+
+        async def run_stream(self, persona, user_id, built):
+            yield ToolStarted("set_reminder")
+            yield ToolFinished("set_reminder", ok=False, detail="2026-10-19T17:00 is in the past")
+            yield TextDelta("Done, reminder set!")
+
+    orchestrator = Orchestrator(stt=Mock(), tts=Mock(), llm=Mock(), vad=Mock(),
+                                memory=_FakeMemory(), prompt_builder=PromptBuilder(),
+                                agent=_Agent())
+    printed = []
+
+    await run_text_loop(orchestrator, _persona(), "u1",
+                        read_input=_scripted_input(["remind me", "exit"]),
+                        print_fn=printed.append)
+
+    assert "  (set_reminder reported a problem: 2026-10-19T17:00 is in the past)" in printed

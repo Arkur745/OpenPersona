@@ -19,7 +19,7 @@ repo, not this one.
 | File | What it gives you |
 |---|---|
 | `PROGRESS.md` (local, git-ignored) | Current status: commits, uncommitted work, what's unverified, next step, known issues |
-| `DECISIONS.md` | Every settled decision and why (D1–D31). Don't re-open one without asking the user |
+| `DECISIONS.md` | Every settled decision and why (D1–D32). Don't re-open one without asking the user |
 | `AGENTS.md` (local, git-ignored) | Short rule list + layout + commands for coding agents |
 | `docs/ARCHITECTURE.md` | How everything works as built; one section per component |
 | Each package's `__init__.py` docstring | A mini doc of that package: what's in it and its main rule |

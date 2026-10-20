@@ -177,3 +177,44 @@ def test_empty_user_message_still_produces_a_context_turn(empty_message):
 
     assert result.context[-1].role == "user"
     assert result.context[-1].text == ""
+
+
+# --- tool-use rules (personas with tools) -------------------------------------
+# Each rule targets a failure seen with qwen2.5:7b in manual testing on
+# 2026-10-20 (see _TOOL_USE_SECTION's comment in prompt_builder.py).
+
+
+def test_tool_rules_are_added_only_for_personas_with_tools():
+    with_tools = PromptBuilder().build(_persona(tools=["reminders"]), [], [], "hi").prompt
+    without = PromptBuilder().build(_persona(), [], [], "hi").prompt
+
+    assert "How to use your tools:" in with_tools
+    assert "How to use your tools:" not in without
+
+
+def test_tool_rules_cover_the_observed_failures():
+    prompt = PromptBuilder().build(_persona(tools=["notes"]), [], [], "hi").prompt
+
+    assert "call the tool now, in this turn. Don't ask whether to" in prompt
+    assert "Only say you did something if a tool result in this turn confirms it" in prompt
+    assert 'starts with "Error:"' in prompt
+    assert "without announcing them first" in prompt
+    assert "No LaTeX" in prompt
+
+
+def test_memory_section_says_past_actions_happened_then():
+    prompt = PromptBuilder().build(
+        _persona(), [], [_turn("assistant", "Got it, reminder set.")], "remind me again"
+    ).prompt
+
+    assert "happened then, not in this turn" in prompt
+
+
+def test_tool_rules_come_after_memories():
+    """Order matters: with the rules before the memories, qwen2.5:7b copied
+    a remembered "reminder set" reply instead of calling the tool."""
+    prompt = PromptBuilder().build(
+        _persona(tools=["reminders"]), [], [_turn("assistant", "Got it, reminder set.")], "hi"
+    ).prompt
+
+    assert prompt.index("Relevant memories") < prompt.index("How to use your tools:")

@@ -50,6 +50,19 @@ from companion.core.interfaces.types import Persona, Turn
 
 _TRUNCATION_MARKER = " [...truncated]"
 
+# Added for personas that list `tools:`. Each rule targets a failure seen
+# with qwen2.5:7b in manual testing (2026-10-20): copying a remembered
+# "Got it, reminder set" reply instead of calling the tool; asking "shall I
+# save this?" when the user already asked; narrating ("I'll use the
+# calculator") before a tool call, which gets spoken in voice mode; and
+# LaTeX math, which is unreadable aloud.
+_TOOL_USE_SECTION = """How to use your tools:
+- When the user asks for something one of your tools does (saving a note, setting or listing reminders, a calculation, a lookup), call the tool now, in this turn. Don't ask whether to; they already asked.
+- Only say you did something if a tool result in this turn confirms it. Past memories of doing it don't count.
+- If a tool result starts with "Error:", tell the user it didn't work, or fix the arguments and try again.
+- Call tools without announcing them first. Don't say "I'll use the calculator"; just give the answer.
+- Write plain conversational text. No LaTeX, no math markup, no markdown tables."""
+
 
 @dataclass(frozen=True)
 class BuiltPrompt:
@@ -103,6 +116,12 @@ class PromptBuilder:
         )
         if memory_section:
             sections.append(memory_section)
+        # Tool rules go last, after memories. Measured with real memory that
+        # held earlier "Got it, reminder set" replies: with the rules before
+        # the memories, qwen2.5:7b copied a remembered reply instead of
+        # calling the tool in 2 of 5 runs; with the rules last, 0 of 5.
+        if persona.tools:
+            sections.append(_TOOL_USE_SECTION)
 
         prompt = "\n\n".join(sections)
 
@@ -134,7 +153,11 @@ class PromptBuilder:
         if not memory_turns:
             return ""
         lines = [
-            "Relevant memories from your history with this user (most relevant first):"
+            (
+                "Relevant memories from your history with this user (most relevant "
+                "first). They describe past conversations: anything they say was "
+                "done (a reminder set, a note saved) happened then, not in this turn."
+            )
         ]
         for turn in memory_turns:
             date = turn.timestamp.strftime("%Y-%m-%d")

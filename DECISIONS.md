@@ -221,6 +221,27 @@ instruction to add a co-author trailer.
 fakes, run by hand) and keep explicit "not verified" notes. The README
 backs the user's resume claims, so overstatement is costly.
 
+### D32. Tool-use rules go last in the prompt; only real tool calls are announced
+**Active, 2026-10-20.** Found in manual testing with qwen2.5:7b:
+- the Planner copied remembered "reminder set" replies instead of calling
+  the tool, and claimed success;
+- the Mentor asked permission instead of saving a note;
+- the Study Buddy narrated and wrote LaTeX.
+
+*Decision:*
+- `PromptBuilder` appends tool-use rules after the memories, for personas
+  with tools.
+- Tool descriptions say when to use each tool.
+- The runner announces only parsed, valid calls.
+- Tool failures are shown to the user (`ToolFinished.detail`).
+
+*Why the order:* measured on the user's real memory, rules after the
+memories gave 10/10 reminders stored, versus 3/5 before.
+*Rejected:* dropping the persona's own past replies from memory. That
+also gave 5/5, but would stop every persona recalling what it said
+before.
+*Details:* `docs/ARCHITECTURE.md` "Agentic personas".
+
 ### D31. Local-only orientation files
 **Active, 2026-10-19.** `AGENTS.md` (rules for coding agents) and
 `PROGRESS.md` (status log) are git-ignored. `DECISIONS.md` (this file)

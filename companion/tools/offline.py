@@ -159,8 +159,11 @@ def build_notes_tools(ctx: ToolContext) -> list[Tool]:
         return f"Deleted note #{note_id}." if deleted else f"There is no note #{note_id}."
 
     return [
-        Tool("add_note", "Save a note for the user to look up later.", add_note),
-        Tool("search_notes", "Find the user's saved notes, newest first.", search_notes),
+        Tool("add_note", "Save a note for the user to look up later. Use it whenever "
+             "they say 'note that', 'make a note', 'write down', 'remember that' or "
+             "similar; save it right away, don't ask first.", add_note),
+        Tool("search_notes", "Find the user's saved notes, newest first. Use it when "
+             "they ask what notes they have or what they asked you to note.", search_notes),
         Tool("delete_note", "Delete one saved note by its number. Only when the user asks.",
              delete_note),
     ]
@@ -172,7 +175,10 @@ def build_notes_tools(ctx: ToolContext) -> list[Tool]:
 def parse_due_time(ctx: ToolContext, minutes_from_now: int | None, at: str | None) -> datetime:
     now = ctx.now()
     if (minutes_from_now is None) == (at is None or not at.strip()):
-        raise ToolInputError("Give exactly one of minutes_from_now or at.")
+        raise ToolInputError(
+            "Give exactly one of minutes_from_now or at. For 'in 5 minutes' pass "
+            "minutes_from_now=5; for a clock time pass at='2026-10-20T17:00'."
+        )
     if minutes_from_now is not None:
         if minutes_from_now <= 0:
             raise ToolInputError("minutes_from_now must be positive.")
@@ -221,8 +227,10 @@ def build_reminders_tools(ctx: ToolContext) -> list[Tool]:
 
     return [
         Tool("set_reminder", "Set a reminder that will be shown to the user when it's due. "
-             "Use minutes_from_now for relative times, or at for a specific time "
-             "(call get_datetime first if you need today's date).", set_reminder),
+             "Call it every time the user asks to be reminded, even if a similar "
+             "reminder was set before. Use minutes_from_now for relative times "
+             "(e.g. 1 for 'in a minute'), or at for a specific time (call "
+             "get_datetime first if you need today's date).", set_reminder),
         Tool("list_reminders", "List the user's upcoming reminders.", list_reminders),
         Tool("cancel_reminder", "Cancel an upcoming reminder by its number.", cancel_reminder),
     ]

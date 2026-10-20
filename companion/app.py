@@ -55,7 +55,7 @@ from companion.backends.tts.coqui_local import CoquiTTS
 from companion.backends.tts.piper_local import PiperTTS
 from companion.backends.vad.silero_vad import SileroVAD
 from companion.config.loader import AppConfig, BackendConfig
-from companion.core.agent import AgentEvent, ToolStarted
+from companion.core.agent import AgentEvent, ToolFinished, ToolStarted
 from companion.core.interfaces.types import Persona, Turn
 from companion.core.orchestrator import Orchestrator
 from companion.core.persona_loader import PersonaLoader
@@ -310,6 +310,9 @@ async def run_text_loop(
     def show_tool_use(event: AgentEvent) -> None:
         if isinstance(event, ToolStarted):
             print_fn(f"  (using {event.name}...)")
+        elif isinstance(event, ToolFinished) and not event.ok:
+            # Shown even if the model then claims success.
+            print_fn(f"  ({event.name} reported a problem: {event.detail or 'unknown error'})")
 
     poller = asyncio.create_task(poll_reminders()) if check_reminders else None
     try:
