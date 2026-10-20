@@ -254,7 +254,8 @@ conversation loop runs, not partway through one.
 
 Long conversations don't pile up forever as raw turns. Once a persona's
 memory for you holds `memory.summarizer.trigger_turn_count` turns (50 by
-default), the oldest half are summarized by the LLM into one summary turn
+default), the oldest half, in whole exchanges, are summarized by the LLM
+(at a low temperature, for faithfulness) into one summary turn
 in the background, after a reply, so it never slows a reply down. Set it
 to `0` to turn it off. Works with both memory backends. Design and safety
 details (e.g. a summary can't bring back memory you deleted) are in

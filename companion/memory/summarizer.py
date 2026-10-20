@@ -6,7 +6,8 @@ useful over long-running relationships with a persona. See
 docs/ROLLING_SUMMARIZER.md for the full design.
 
 How it works: once a scope holds `trigger_turn_count` raw (`user`/
-`assistant`) turns, the oldest half of them are summarized by the LLM and
+`assistant`) turns, the oldest half of them (extended to end on a reply, so
+no question is split from its answer) are summarized by the LLM and
 replaced, through `MemoryStore.replace_turns()`, with one `role="system"`
 summary turn timestamped at the newest turn it replaced. Summary turns are
 excluded from the count and never re-summarized (section 3 of the note).
@@ -87,7 +88,7 @@ class RollingSummarizer:
         if len(raw) < self.trigger_turn_count:
             return False
 
-        batch = raw[: self.batch_size]
+        batch = self._whole_exchanges(raw)
         summary_text = await self._summarize(batch)
         if not summary_text:
             logger.warning(
@@ -115,6 +116,20 @@ class RollingSummarizer:
                 persona_id,
             )
         return replaced
+
+    def _whole_exchanges(self, raw: list[Turn]) -> list[Turn]:
+        """The oldest `batch_size` raw turns, extended so the batch ends
+        just before one of the user's messages: it never splits a
+        question from its reply. A split batch starts with a reply whose
+        question is missing; the one garbled summary seen with a real model
+        ("a nurse named Pune") came from such a batch. If no user message
+        follows, fall back to the plain `batch_size` cut."""
+        n = min(self.batch_size, len(raw))
+        while n < len(raw) and raw[n].role != "user":
+            n += 1
+        if n == len(raw):
+            n = min(self.batch_size, len(raw))
+        return raw[:n]
 
     async def _summarize(self, batch: list[Turn]) -> str:
         context = [Turn(role="user", text=_render_transcript(batch))]

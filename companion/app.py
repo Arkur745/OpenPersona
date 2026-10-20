@@ -78,6 +78,7 @@ if TYPE_CHECKING:
 _EXIT_COMMANDS = {"exit", "quit"}
 _DEFAULT_TOOL_DATA_DIR = "./data/tools"
 REMINDER_POLL_S = 20.0
+SUMMARY_TEMPERATURE = 0.2  # see build_summarizer
 
 
 class AppSetupError(RuntimeError):
@@ -151,7 +152,13 @@ def build_summarizer(config: AppConfig, memory: MemoryStore) -> RollingSummarize
     section 4)."""
     if config.summarizer_trigger_turn_count is None:
         return None
-    llm = _build_single_backend(config.llm, "ollama", OllamaLLM, "llm")
+    # A summary replaces the raw turns, so it should be faithful, not
+    # lively: always a low temperature, whatever the chat uses.
+    section = BackendConfig(
+        backend=config.llm.backend,
+        options={**config.llm.options, "temperature": SUMMARY_TEMPERATURE},
+    )
+    llm = _build_single_backend(section, "ollama", OllamaLLM, "llm")
     return RollingSummarizer(
         memory=memory, llm=llm, trigger_turn_count=config.summarizer_trigger_turn_count
     )

@@ -151,6 +151,7 @@ memory:
     persist_dir: ./data/memory
   summarizer:
     # Once a persona's memory holds this many raw turns, the oldest half
+    # (rounded up to whole exchanges, at a low temperature)
     # are summarized by the LLM into one summary turn, in the background
     # after a turn (never delaying a reply). 0 or omitted = off. See
     # docs/ROLLING_SUMMARIZER.md.

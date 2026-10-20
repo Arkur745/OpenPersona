@@ -139,14 +139,15 @@ def test_summary_made_in_one_process_replaces_turns_for_the_next(backend, tmp_pa
 
     stored = _child("list", backend, tmp_path)["turns"]
     assert stored[0]["role"] == "system"
-    assert stored[0]["timestamp"] == turns[2]["timestamp"]
+    # Whole exchanges only: half of 6 is 3, extended to 4 to end on a reply.
+    assert stored[0]["timestamp"] == turns[3]["timestamp"]
     assert "Berlin marathon" in stored[0]["text"]
-    assert stored[1:] == turns[3:]
+    assert stored[1:] == turns[4:]
 
     results = _child("query", backend, tmp_path, query="Maya Berlin marathon", k=5)["results"]
     assert stored[0] in results
 
-    # A fourth process: nothing is due any more (3 raw turns, summary not counted).
+    # A fourth process: nothing is due any more (2 raw turns, summary not counted).
     assert _child("summarize", backend, tmp_path, trigger=6) == {"ran": False}
 
 

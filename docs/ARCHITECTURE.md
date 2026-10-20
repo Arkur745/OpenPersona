@@ -568,7 +568,8 @@ turns. Full design: `docs/ROLLING_SUMMARIZER.md`.
 
 - **What it does:** once a `(user, persona)` scope holds
   `memory.summarizer.trigger_turn_count` raw user/assistant turns
-  (default 50; 0 or missing = off), the oldest half are summarized by the
+  (default 50; 0 or missing = off), the oldest half (extended to end on a
+  reply, so no question is split from its answer) are summarized by the
   LLM into one third-person summary turn (`role="system"`, timestamped at
   the newest turn it replaced) and swapped in through `replace_turns`.
   Summary turns aren't counted and are never re-summarized.
@@ -601,9 +602,17 @@ turns. Full design: `docs/ROLLING_SUMMARIZER.md`.
   Pune). Isolated re-runs of the same batches gave 0 errors in 60
   summaries, at temperature 0.7 and 0.2 and with a stricter prompt, so
   it's rare but real. Because a summary *replaces* the raw turns, the
-  error then persists. Not mitigated yet; options include summarizing
-  only whole exchanges, a lower temperature for the summarizer, or
-  keeping the raw turns as well.
+  error then persists.
+  **Hardened 2026-10-20:**
+  - batches are whole exchanges: the garbled batch had started with a
+    reply whose question was in the previous batch;
+  - summaries use temperature 0.2 (`app.SUMMARY_TEMPERATURE`), whatever the
+    chat uses.
+
+  Two real CLI-loop runs afterwards were clean, with each summary
+  covering whole exchanges. The original error was too rare to measure,
+  so this is risk reduction, not a proven fix. Keeping raw turns
+  alongside summaries is the remaining option if it recurs.
 
 ### Persistence across real process restarts (both backends)
 

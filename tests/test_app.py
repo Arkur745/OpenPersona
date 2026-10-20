@@ -635,3 +635,16 @@ async def test_text_loop_shows_a_failed_tool_even_if_the_reply_claims_success():
                         print_fn=printed.append)
 
     assert "  (set_reminder reported a problem: 2026-10-19T17:00 is in the past)" in printed
+
+
+def test_summarizer_uses_a_low_temperature_whatever_the_chat_uses():
+    """A summary replaces raw turns, so it should be faithful, not lively."""
+    from dataclasses import replace
+
+    from companion.app import SUMMARY_TEMPERATURE, build_summarizer
+
+    config = replace(_config(), summarizer_trigger_turn_count=6)
+    summarizer = build_summarizer(config, memory=Mock())
+
+    assert summarizer.llm.temperature == SUMMARY_TEMPERATURE == 0.2
+    assert summarizer.llm.model == config.llm.options["model"]

@@ -101,6 +101,8 @@ Design choices, each with the alternative it beat:
 raw = [t for t in await memory.list_turns(u, p) if t.role != "system"]
 if len(raw) < trigger_turn_count: return False
 batch = raw[: trigger_turn_count // 2]          # oldest half
+# 2026-10-20: extended until the next turn is a user message, so a batch
+# never splits a question from its reply (RollingSummarizer._whole_exchanges)
 summary_text = <LLM over batch>
 if not summary_text.strip(): return False       # never replace with nothing
 return await memory.replace_turns(u, p, batch, Turn("system", summary_text, batch[-1].timestamp))

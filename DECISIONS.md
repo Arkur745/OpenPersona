@@ -119,7 +119,8 @@ experimental for recall and decay trade-offs, not speed.
 ### D15. Rolling summarization extends `MemoryStore` and runs off the request path
 **Active, 2026-10-19.** `MemoryStore` gained `list_turns` and an
 all-or-nothing `replace_turns`. Once a scope holds `trigger_turn_count`
-raw turns, the oldest half become one `role="system"` summary turn. It
+raw turns, the oldest half (whole exchanges only, temperature 0.2, both
+since 2026-10-20) become one `role="system"` summary turn. It
 runs as a background task after a turn; Streamlit calls it after the
 reply renders.
 *Why:* `write`/`delete` alone couldn't do it. All-or-nothing, so a

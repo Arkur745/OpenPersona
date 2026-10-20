@@ -182,16 +182,18 @@ async def test_due_replaces_oldest_half_with_one_summary_turn(store):
     assert ran is True
     stored = await store.list_turns("u1", "p1")
     summary, rest = stored[0], stored[1:]
-    assert rest == turns[3:]  # newer turns untouched, still verbatim
+    # Half of 6 is 3, extended to 4 so the batch ends on a reply: two whole
+    # exchanges summarized, the third exchange kept verbatim.
+    assert rest == turns[4:]
     assert summary.role == "system"
-    assert summary.timestamp == turns[2].timestamp  # newest replaced turn
+    assert summary.timestamp == turns[3].timestamp  # newest replaced turn
     assert summary.text == "Summary of earlier conversation (2026-01-01): The user counted to six."
 
-    # The LLM saw exactly the oldest three turns, in order.
+    # The LLM saw exactly the oldest four turns, in order.
     (_prompt, context), = llm.calls
     transcript = context[0].text
     assert [line.split(": ", 1)[1] for line in transcript.splitlines()] == [
-        t.text for t in turns[:3]
+        t.text for t in turns[:4]
     ]
 
 
@@ -199,17 +201,18 @@ async def test_due_replaces_oldest_half_with_one_summary_turn(store):
 async def test_summaries_are_not_counted_or_resummarized(store):
     await _write_turns(store, 6)
     summarizer = RollingSummarizer(store, _FakeLLM(), trigger_turn_count=6)
-    assert await summarizer.summarize_if_due("u1", "p1") is True  # 3 raw + 1 summary left
+    assert await summarizer.summarize_if_due("u1", "p1") is True  # 2 raw + 1 summary left
 
-    await _write_turns(store, 2, start=6)  # 5 raw: not due, summary isn't counted
+    await _write_turns(store, 3, start=6)  # 5 raw: not due, summary isn't counted
     assert await summarizer.summarize_if_due("u1", "p1") is False
 
-    newer = await _write_turns(store, 1, start=8)  # 6 raw: due again
+    await _write_turns(store, 1, start=9)  # 6 raw: due again
     assert await summarizer.summarize_if_due("u1", "p1") is True
 
     stored = await store.list_turns("u1", "p1")
     assert [t.role for t in stored[:2]] == ["system", "system"]
-    assert stored[2:] == [_turn(6), _turn(7), *newer]
+    # Second batch: raw turns 4-7 (two whole exchanges); 8 and 9 kept.
+    assert stored[2:] == [_turn(8), _turn(9)]
     # The second run's input held only raw turns, never the first summary.
     _prompt, context = summarizer.llm.calls[1]
     assert "Summary of earlier conversation" not in context[0].text
@@ -381,3 +384,32 @@ async def test_no_summarizer_means_no_background_tasks():
     orchestrator = _orchestrator(None)
     await orchestrator.handle_text_turn("u1", _persona(), [], "hi")
     assert orchestrator._summary_tasks == {}
+
+
+# --- batches are whole exchanges (hardening after a garbled real summary) -----
+
+
+def _aligned(trigger, roles):
+    turns = [Turn(role=r, text=f"t{i}", timestamp=BASE + timedelta(minutes=i))
+             for i, r in enumerate(roles)]
+    batch = RollingSummarizer(object(), _FakeLLM(), trigger_turn_count=trigger)._whole_exchanges(turns)
+    return [t.text for t in batch]
+
+
+def test_batch_never_ends_with_a_question_cut_off_from_its_reply():
+    """With trigger 6 the plain cut is 3 turns: user, reply, user. That left
+    the third question's reply to start the *next* batch with its question
+    missing, and a real summary of such a batch garbled a fact."""
+    roles = ["user", "assistant"] * 4
+    assert _aligned(6, roles) == ["t0", "t1", "t2", "t3"]
+    assert _aligned(4, roles) == ["t0", "t1"]  # already whole: unchanged
+
+
+def test_batch_extends_over_several_replies_until_the_next_user_message():
+    roles = ["user", "assistant", "user", "assistant", "assistant", "user", "assistant"]
+    assert _aligned(6, roles) == ["t0", "t1", "t2", "t3", "t4"]
+
+
+def test_batch_falls_back_to_the_plain_cut_when_no_user_message_follows():
+    roles = ["user", "assistant", "assistant", "assistant", "assistant", "assistant"]
+    assert _aligned(6, roles) == ["t0", "t1", "t2"]
