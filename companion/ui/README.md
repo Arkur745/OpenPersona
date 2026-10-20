@@ -19,6 +19,11 @@ Agentic personas work here too:
 - due reminders appear as toasts, from an `st.fragment` that reruns every
   20 seconds, so you don't have to type anything.
 
+**Speak replies** autoplays each spoken reply (no click needed). For
+push-to-talk messages, the audio is kept in session state across the
+`st.rerun()` that follows and played once afterwards; before that fix,
+the rerun wiped the player before it could play.
+
 Rolling summarization also runs here, after a reply has rendered rather
 than as a background task, because each Streamlit turn runs under its own
 event loop (see `docs/ROLLING_SUMMARIZER.md` section 5).

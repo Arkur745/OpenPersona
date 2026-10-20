@@ -201,7 +201,12 @@ def _process_message(
     message: str,
     *,
     speak_reply: bool,
+    play_after_rerun: bool = False,
 ) -> None:
+    """`play_after_rerun`: the push-to-talk path calls `st.rerun()` right
+    after this returns, which would wipe an audio player rendered here
+    before it could play. In that case the audio is kept in session state
+    and played once, after the rerun, by `_play_pending_audio`."""
     with st.chat_message("assistant"):
         # Tool activity (agentic personas) shows up in a collapsible status
         # box as it happens; it only appears once a tool is actually used.
@@ -262,7 +267,13 @@ def _process_message(
                     # the reply that already rendered successfully above.
                     st.warning(f"Couldn't synthesize speech: {exc}")
                 else:
-                    st.audio(samples, sample_rate=sample_rate)
+                    if play_after_rerun:
+                        st.session_state["_pending_audio"] = (samples, sample_rate)
+                    else:
+                        # autoplay: "Speak replies" should speak without a
+                        # click (the browser allows it, since sending the
+                        # message was a user action).
+                        st.audio(samples, sample_rate=sample_rate, autoplay=True)
 
     recent_turns.append(Turn(role="user", text=message))
     if reply.strip():
@@ -362,6 +373,17 @@ for turn in recent_turns:
     with st.chat_message(turn.role):
         st.write(turn.text)
 
+
+def _play_pending_audio() -> None:
+    """Plays, once, a spoken reply saved across the push-to-talk rerun."""
+    pending = st.session_state.pop("_pending_audio", None)
+    if pending is not None:
+        samples, sample_rate = pending
+        st.audio(samples, sample_rate=sample_rate, autoplay=True)
+
+
+_play_pending_audio()
+
 # Push-to-talk: st.session_state["_voice_gen"] is bumped after every
 # processed recording specifically to change this widget's `key`, which
 # forces Streamlit to mount a *new*, empty audio_input for the next
@@ -391,7 +413,8 @@ if audio_value is not None:
         with st.chat_message("user"):
             st.write(transcript)
         _process_message(
-            orchestrator, persona, user_id, recent_turns, transcript.strip(), speak_reply=speak_reply
+            orchestrator, persona, user_id, recent_turns, transcript.strip(),
+            speak_reply=speak_reply, play_after_rerun=True,
         )
     elif transcript is not None:
         st.warning("Didn't catch any speech in that recording — try again.")

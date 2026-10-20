@@ -926,6 +926,10 @@ Design note, including the reasoning this follows: `docs/AGENTIC_TOOLS.md`.
 the memories:
 - act when asked, without asking permission or announcing the tool first;
 - only claim what a tool result in this turn confirms;
+- for questions about how things stand now (date and time, reminders,
+  notes), check with the tool every time, never from memory or earlier
+  messages. "What day is tomorrow?" used the tool 2/5 before this rule
+  and 5/5 after;
 - react to `Error:` results;
 - plain text, no LaTeX.
 

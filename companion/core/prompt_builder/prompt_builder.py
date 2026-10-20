@@ -59,6 +59,7 @@ _TRUNCATION_MARKER = " [...truncated]"
 _TOOL_USE_SECTION = """How to use your tools:
 - When the user asks for something one of your tools does (saving a note, setting or listing reminders, a calculation, a lookup), call the tool now, in this turn. Don't ask whether to; they already asked.
 - Only say you did something if a tool result in this turn confirms it. Past memories of doing it don't count.
+- For questions about how things stand right now (today's date or time, what reminders or notes the user has), call the tool every time. Don't answer from memory or from earlier in this conversation; it may be out of date.
 - If a tool result starts with "Error:", tell the user it didn't work, or fix the arguments and try again.
 - Call tools without announcing them first. Don't say "I'll use the calculator"; just give the answer.
 - Write plain conversational text. No LaTeX, no math markup, no markdown tables."""

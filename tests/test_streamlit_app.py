@@ -156,3 +156,48 @@ def test_tool_failure_stays_visible(fake_backends, monkeypatch):
     assert not at.exception, at.exception
     assert "⚠️ set_reminder reported a problem: time is in the past" in [m.value for m in at.markdown]
     assert at.status[0].label == "A tool reported a problem"
+
+
+class _FakeTTS:
+    sample_rate = 16000
+
+    async def synthesize_stream(self, text_chunk):
+        yield b"\x00\x01" * 1600
+
+    def stop(self):
+        pass
+
+
+def test_speak_replies_autoplays_the_reply(fake_backends, monkeypatch):
+    """Regression: the player rendered with autoplay off, so nothing was
+    heard unless you found it and pressed play."""
+    from companion import app
+
+    monkeypatch.setattr(app, "build_tts_for_persona", lambda config, persona: _FakeTTS())
+    at = AppTest.from_file(APP_PATH, default_timeout=30)
+    at.run()
+    at.sidebar.checkbox[0].check().run()
+
+    at.chat_input[0].set_value("Hi there").run()
+
+    assert not at.exception, at.exception
+    audio = at.get("audio")
+    assert len(audio) == 1 and audio[0].proto.autoplay
+
+
+def test_pending_push_to_talk_audio_plays_once_after_the_rerun(fake_backends):
+    """Regression: push-to-talk calls st.rerun() right after replying, which
+    wiped the audio player before it played. The audio is now kept in
+    session state and played once after the rerun."""
+    import numpy as np
+
+    at = AppTest.from_file(APP_PATH, default_timeout=30)
+    at.run()
+    at.session_state["_pending_audio"] = (np.zeros(1600, dtype="<i2"), 16000)
+
+    at.run()
+    played = at.get("audio")
+    at.run()
+
+    assert len(played) == 1 and played[0].proto.autoplay
+    assert len(at.get("audio")) == 0  # played once, not on every rerun

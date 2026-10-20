@@ -254,6 +254,9 @@ before.
   successfully retried.
 - *Rule:* prefer one required, plainly named argument over optional
   either/or ones.
+- A further prompt rule: lookups (date, reminders, notes) always go
+  through the tool, never from memory or earlier messages. Before it, a
+  reminder list was made up in the user's session.
 *Details:* `docs/ARCHITECTURE.md` "Agentic personas".
 
 ### D31. Local-only orientation files
