@@ -91,12 +91,25 @@ class OllamaLLM(LLMBackend):
         self.stop = stop
 
         self._client = None  # created lazily — see _ensure_client
+        self._client_loop = None  # the event loop `_client` was created on
 
     def _ensure_client(self):
-        if self._client is None:
+        """One client per event loop. `AsyncClient` holds an httpx
+        connection pool bound to the loop it was created on; reusing it under
+        a later `asyncio.run()` fails with "Event loop is closed". The CLI
+        runs one loop for the whole session, so it builds one client, but
+        Streamlit runs a fresh loop per message (and per summarizer call).
+        A client set directly (tests do this) has no recorded loop and is
+        always kept."""
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        stale = self._client_loop is not None and self._client_loop is not loop
+        if self._client is None or stale:
             from ollama import AsyncClient
 
             self._client = AsyncClient(host=self.host)
+            self._client_loop = loop
         return self._client
 
     def _options(self) -> dict:

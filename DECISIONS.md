@@ -190,7 +190,12 @@ default model is added.
 
 ### D26. Streamlit is the first UI (text + push-to-talk)
 **Active.** Not the hands-free voice mode, which doesn't fit Streamlit's
-rerun model.
+rerun model. Consequence: Streamlit runs a new event loop per message,
+so **any cached async client must be created per event loop** (see
+`OllamaLLM._ensure_client`). A shared client caused "Event loop is
+closed" on the second message (fixed 2026-10-20). A future React/API
+server with one long-lived loop wouldn't hit this, but the rule still
+holds.
 
 ### D27. Next UI: a React frontend, on a local API server
 **Active (plan), 2026-10-19; not started.** It needs a local HTTP +

@@ -230,3 +230,34 @@ async def test_text_alongside_a_tool_call_is_not_streamed_as_the_answer(tmp_path
     events = await _run(agent, _persona("calculator"))
 
     assert [e.text for e in events if isinstance(e, TextDelta)] == ["23% of 1,875 is 431.25."]
+
+
+def test_chat_model_is_rebuilt_for_a_new_event_loop(tmp_path):
+    """Regression for Streamlit's "Event loop is closed": ChatOllama's async
+    client is loop-bound, so each new loop gets a fresh one."""
+    import asyncio
+
+    agent = LangGraphOllamaAgent(memory=_NoMemory(), data_dir=str(tmp_path))
+
+    async def get():
+        return agent._ensure_chat_model(), agent._ensure_chat_model()
+
+    a1, a2 = asyncio.run(get())
+    b1, _ = asyncio.run(get())
+
+    assert a1 is a2
+    assert b1 is not a1
+
+
+def test_real_qwen_works_across_separate_event_loops(tmp_path):
+    import asyncio
+
+    if not _model_available("qwen2.5:7b-instruct"):
+        pytest.skip("needs a local Ollama server with qwen2.5:7b-instruct pulled")
+    agent = LangGraphOllamaAgent(memory=_NoMemory(), data_dir=str(tmp_path), temperature=0)
+
+    def turn():
+        return asyncio.run(_run(agent, _persona("get_datetime"), "What day of the week is it?"))
+
+    for _ in range(2):
+        assert any(isinstance(e, TextDelta) for e in turn())

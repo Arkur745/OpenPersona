@@ -234,3 +234,49 @@ def test_real_ollama_model_not_found_raises():
 
     with pytest.raises(OllamaModelNotFoundError):
         asyncio.run(run())
+
+
+# --- one client per event loop (Streamlit runs a new loop per message) --------
+
+
+def test_client_is_rebuilt_for_a_new_event_loop():
+    """Regression: the Streamlit UI failed its second message with "Event
+    loop is closed" because the cached AsyncClient was bound to the first
+    message's loop."""
+    llm = OllamaLLM(model="m")
+
+    async def get():
+        return llm._ensure_client(), llm._ensure_client()
+
+    first_a, first_b = asyncio.run(get())
+    second, _ = asyncio.run(get())
+
+    assert first_a is first_b  # same loop: reused
+    assert second is not first_a  # new loop: fresh client
+
+
+def test_injected_client_is_kept_across_loops():
+    llm = OllamaLLM(model="m")
+    fake = object()
+    llm._client = fake
+
+    async def get():
+        return llm._ensure_client()
+
+    assert asyncio.run(get()) is fake
+    assert asyncio.run(get()) is fake
+
+
+def test_real_ollama_works_across_separate_event_loops():
+    """What Streamlit does: one cached backend, a separate asyncio.run()
+    per message."""
+    pytest.importorskip("ollama")
+    model = _reachable_ollama_model_or_skip()
+    llm = OllamaLLM(model=model, num_predict=8)
+
+    async def reply():
+        return "".join([t async for t in llm.generate_stream("Reply with one word.", [
+            Turn(role="user", text="Hi")])])
+
+    assert asyncio.run(reply()).strip()
+    assert asyncio.run(reply()).strip()

@@ -70,18 +70,27 @@ class LangGraphOllamaAgent:
         self.data_dir = Path(data_dir)
         self.num_ctx = num_ctx
         self._chat_model = None  # built lazily, like OllamaLLM's client
+        self._chat_model_loop = None  # the event loop it was built on
 
     def handles(self, persona: Persona) -> bool:
         return bool(enabled_tool_names(persona, self.allow_network))
 
     def _ensure_chat_model(self):
-        if self._chat_model is None:
+        """One `ChatOllama` per event loop, for the same reason as
+        `OllamaLLM._ensure_client`: its async HTTP client is bound to the
+        loop it was created on, and Streamlit runs a new loop per message. A
+        model set directly (tests inject fakes this way) has no recorded
+        loop and is always kept."""
+        loop = asyncio.get_running_loop()
+        stale = self._chat_model_loop is not None and self._chat_model_loop is not loop
+        if self._chat_model is None or stale:
             from langchain_ollama import ChatOllama
 
             kwargs = {"model": self.model, "base_url": self.host, "temperature": self.temperature}
             if self.num_ctx is not None:
                 kwargs["num_ctx"] = self.num_ctx
             self._chat_model = ChatOllama(**kwargs)
+            self._chat_model_loop = loop
         return self._chat_model
 
     def _wrap(self, tool: Tool):

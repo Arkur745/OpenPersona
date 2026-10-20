@@ -374,6 +374,18 @@ touching `mic_audio` directly. `_pump_mic` itself is only cancelled when
 
 ## LLM (implemented)
 
+> **Async clients are per event loop** (fixed 2026-10-20). `OllamaLLM`
+> and `LangGraphOllamaAgent` each cache their async HTTP client
+> (`AsyncClient`, `ChatOllama`), and those clients are bound to the event
+> loop they were created on. The CLI uses one loop per session, but
+> Streamlit calls `asyncio.run()` per message and per summarizer run, so
+> reusing a client failed the second message with "Event loop is closed".
+> Both now record their client's loop and rebuild the client when a
+> different loop is running (`_ensure_client` / `_ensure_chat_model`).
+> Any new backend that caches an async client must do the same.
+> Regression tests: `tests/test_llm_ollama.py` and
+> `tests/test_agent_langgraph.py`, deterministic and against real Ollama.
+
 `companion/backends/llm/ollama_local.py`'s `OllamaLLM` talks to a local
 Ollama server via the `ollama` Python package's `AsyncClient`. Two things
 worth knowing:
