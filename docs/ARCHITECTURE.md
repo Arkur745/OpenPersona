@@ -1104,6 +1104,11 @@ future model or library version brings that bug back, the pre-filter in
 - `tests/test_app.py`, `tests/test_streamlit_app.py`,
   `tests/test_voice_app.py`: wiring and reminder delivery.
 - `scripts/check_offline.py`: one real tool call under the network guard.
+- **By hand (manual test 8, user's hardware, 2026-10-20):** voice mode
+  with the Planner on a real mic and speaker. The filler and answer,
+  barge-in, and a spoken reminder all worked, after two fixes found in
+  that test (the bounded playback drain and spoken "p.m." times, both
+  above). The user reported what they heard; nothing here was measured.
 
 ## Open decisions
 
