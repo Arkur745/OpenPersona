@@ -345,3 +345,23 @@ async def test_web_search_failure_is_reported_not_raised(tmp_path, monkeypatch):
     search = _tools(_ctx(tmp_path), "web_search", allow_network=True)["web_search"]
 
     assert await search(query="rust") == "Web search failed: RuntimeError: rate limited"
+
+
+# Speech-to-text spells times differently from typing. qwen passes them on
+# verbatim (measured: `when='9:22 p.m.'` from "Set a reminder at 9.22 p.m."),
+# and before these were accepted every such voice reminder failed (0/3).
+@pytest.mark.parametrize("when, expected", [
+    ("9:22 p.m.", "Mon 21:22"),
+    ("9:22 P.M.", "Mon 21:22"),
+    ("9.22 p.m.", "Mon 21:22"),
+    ("9.22 PM", "Mon 21:22"),
+    ("9 22 pm", "Mon 21:22"),
+    ("9 p.m.", "Mon 21:00"),
+    ("tomorrow at 9 a.m.", "Tue 09:00"),
+    ("for 10 minutes", "Mon 18:10"),
+    ("after 2 hours", "Mon 20:00"),
+])
+def test_parse_when_understands_speech_to_text_spellings(tmp_path, when, expected):
+    from companion.tools.offline import parse_when
+
+    assert f"{parse_when(_ctx(tmp_path), when):%a %H:%M}" == expected

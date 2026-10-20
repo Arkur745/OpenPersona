@@ -181,10 +181,12 @@ _UNIT_SECONDS = {
 _WORD_NUMBERS = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
                  "ten": 10, "fifteen": 15, "twenty": 20, "thirty": 30, "few": 3}
 _RELATIVE_RE = re.compile(
-    r"^(?:in\s+)?(half\s+an?\s+hour|(\d+(?:\.\d+)?|a|an|one|two|three|four|five|ten|"
+    r"^(?:(?:in|for|after)\s+)?(half\s+an?\s+hour|(\d+(?:\.\d+)?|a|an|one|two|three|four|five|ten|"
     r"fifteen|twenty|thirty|few)\s*([a-z]+))(?:\s+from\s+now)?$"
 )
-_CLOCK_RE = re.compile(r"^(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?$")
+# Speech-to-text writes times as "9:22 p.m.", "9.22 PM" or "9 22 pm"; all
+# of them are accepted (am/pm spellings are normalised in parse_when).
+_CLOCK_RE = re.compile(r"^(?:at\s+)?(\d{1,2})(?:[:. ](\d{2}))?\s*(am|pm)?$")
 _NAMED_TIMES = {"noon": "12:00", "midday": "12:00", "midnight": "00:00",
                 "morning": "09:00", "afternoon": "15:00", "evening": "18:00",
                 "tonight": "20:00"}
@@ -211,13 +213,14 @@ def parse_when(ctx: ToolContext, when: str) -> datetime:
     Takes a single free-text field on purpose: given two optional arguments
     (`minutes_from_now` or `at`), qwen2.5:7b often filled in neither and then
     claimed the reminder was set (measured 0/5 on one phrasing). Accepts
-    "in 10 minutes", "2 hours", "half an hour", "6pm", "at 18:30",
+    "in 10 minutes", "2 hours", "half an hour", "6pm", "9:22 p.m.", "at 18:30",
     "tomorrow at 9am", "tonight", "noon" and ISO "2026-10-20T17:00". A clock
     time that has already passed today means tomorrow.
     """
     now = ctx.now()
     raw = (when or "").strip()
     text = re.sub(r"\s+", " ", raw.lower()).strip(" .")
+    text = re.sub(r"(\d)\s*([ap])\.?\s?m\b\.?", r"\1\2m", text)  # "9:22 p.m." -> "9:22pm"
     if not text:
         raise ToolInputError(_WHEN_HELP)
 
@@ -273,7 +276,8 @@ def build_reminders_tools(ctx: ToolContext) -> list[Tool]:
     store = ToolStore(ctx.data_dir)
 
     async def set_reminder(
-        what: Annotated[str, "What to remind the user about, e.g. 'drink water'"],
+        what: Annotated[str, "What to remind the user about, e.g. 'drink water'; "
+                             "just 'reminder' if the user didn't say"],
         when: Annotated[str, "When, in the user's words: 'in 10 minutes', '6pm', "
                              "'tomorrow at 9am'"],
     ) -> str:

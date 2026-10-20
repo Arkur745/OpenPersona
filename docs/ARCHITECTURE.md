@@ -1016,6 +1016,16 @@ worked:
 | `text` + `when` | 0/10 for the Planner; it left out `text` |
 | `what` + `when` | **20/20** across two personas and four phrasings |
 
+**Spoken times.** In voice mode the model passes on the transcript's own
+spelling: Whisper writes "9:22 p.m.", and qwen sent `when='9:22 p.m.'`
+verbatim. `parse_when` used to accept only "pm", so every such reminder
+failed (0/3 in a probe; found in manual test 8). It now also accepts
+"p.m."/"P.M.", "9.22 pm", "9 22 pm" and "for/after 10 minutes" (4/4 per
+phrasing after the fix, real qwen; regression tests in
+`tests/test_tools.py`). Still open: with no subject ("set a reminder at
+9:22 p.m."), the model often invents one ("review today's notes")
+instead of using the hinted "reminder".
+
 **Honesty guard.** If a tool's last call in a turn failed and it was
 never successfully retried, the runner appends a short "(Heads up: …
 didn't go through, so nothing was saved…)" to the reply
