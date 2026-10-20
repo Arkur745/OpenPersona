@@ -758,6 +758,44 @@ sample_rate,channels}`.
   attempted device/rate and a pointer to `python -m sounddevice` for
   listing what's actually available.
 
+### A stalled speaker must not freeze the session (2026-10-20)
+
+**What the user saw:** in manual testing (voice mode, the Planner), a
+reminder was set and the reply began, then everything went silent and
+the session stopped listening. So the reminder, due 10 s later, was
+never announced.
+
+**What the evidence shows:**
+- The reminder was stored correctly.
+- The same turn, run through the real `handle_voice_turn` with the real
+  qwen agent and scripted mic/TTS (with and without a barge-in), never
+  hung. So the conversation logic is fine.
+- The faked part was real playback. `SpeakerPlayback`'s worker thread
+  calls the blocking `RawOutputStream.write()`, and if the output device
+  stalls that call may never return.
+- That accounts for all three symptoms. Later audio queues up unheard
+  ("mute"), and `wait_drained()` used to wait without limit, so the
+  loop never got back to listening and the next reply, which carries
+  due reminders, never came.
+- The stall itself couldn't be reproduced without the user's hardware.
+  A Bluetooth headset switching profile when the mic opens is one known
+  cause on Windows.
+
+**Fix:**
+- `wait_drained()` now waits at most the queued audio's length plus
+  `DRAIN_MARGIN_S` (2 s). On a stall it logs a warning that names the
+  likely cause and returns, and the session keeps listening.
+- `python -m companion --debug` logs each voice-loop step (listening,
+  heard, responding, speaking, waiting for playback, turn done), so a
+  future stall shows exactly where it stopped.
+- Regression tests (`tests/test_audio_playback.py`): a `write()` that
+  never returns no longer hangs `wait_drained()`, and a healthy drain is
+  still waited for in full.
+
+**Not fixed (can't be, from here):** a stalled device stays silent. The
+session survives, but audio needs the device to recover or a different
+output (wired headphones, `audio.options.output_device`).
+
 ### The real playback-latency barge-in fix (corrects a previously-documented limitation)
 
 The "Voice-turn state machine" section above used to document a known,

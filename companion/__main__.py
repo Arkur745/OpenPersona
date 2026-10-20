@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import sys
 
 from companion.app import (
@@ -63,13 +64,26 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="Show a full traceback instead of a one-line error message.",
+        help=(
+            "Show a full traceback instead of a one-line error message, and "
+            "log each step (in voice mode: listening, heard, responding, "
+            "speaking, playback finished) to stderr."
+        ),
     )
     return parser.parse_args(argv)
 
 
+def _configure_logging(debug: bool) -> None:
+    """Warnings from this app always show (e.g. a stalled speaker). With
+    --debug, every step does too. Third-party libraries stay at WARNING
+    either way, since they're very chatty at DEBUG."""
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+    logging.getLogger("companion").setLevel(logging.DEBUG if debug else logging.WARNING)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+    _configure_logging(args.debug)
     try:
         config_path = resolve_config_path(args.config)
         config = load_config(config_path)

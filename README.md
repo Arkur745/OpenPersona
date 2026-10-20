@@ -199,6 +199,11 @@ python -m companion
 ```
 
 Speak, pause, and the persona replies out loud — press Ctrl+C to quit.
+Wired headphones work best: they keep the mic from hearing the persona,
+and some Bluetooth headsets stall audio output when the mic opens. If the
+speaker stalls, a warning is printed and the session keeps listening. Add
+`--debug` to see each step (heard, responding, speaking…) if something
+seems stuck.
 With a persona that has tools, you'll hear a short filler line ("Let me
 check.") while a tool runs, and you can talk over it at any point to
 interrupt. Due reminders are spoken before the next reply.

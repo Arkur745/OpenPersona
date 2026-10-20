@@ -219,3 +219,57 @@ async def test_real_speaker_playback_smoke():
     finally:
         playback.close()
     assert not playback._worker.is_alive()
+
+
+@pytest.mark.asyncio
+async def test_stalled_speaker_does_not_hang_wait_drained(monkeypatch, caplog):
+    """Regression (manual test 8, 2026-10-20): voice mode went silent and
+    stopped listening. A blocking write() that never returns used to make
+    wait_drained() wait forever; now it gives up after the queued audio's
+    length plus a margin, and logs why."""
+    import time
+
+    _install_fake_sounddevice(monkeypatch, stream_cls=_BlockingFakeRawOutputStream)
+    from companion.audio import playback as pb
+
+    monkeypatch.setattr(pb, "DRAIN_MARGIN_S", 0.2)
+    playback = pb.SpeakerPlayback(sample_rate=16000)
+    stream = _BlockingFakeRawOutputStream.instances[0]
+
+    await playback.play(b"\x00\x00" * 1600)  # 0.1 s of audio; write() will stall
+    await asyncio.to_thread(stream.write_started.wait, 2.0)
+
+    start = time.perf_counter()
+    with caplog.at_level("WARNING"):
+        await asyncio.wait_for(playback.wait_drained(), timeout=1.5)
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 1.0  # budget was ~0.3 s, not "forever"
+    assert "output device may have stalled" in caplog.text
+
+    stream.release.set()
+    playback.close()
+
+
+@pytest.mark.asyncio
+async def test_normal_playback_still_waits_for_the_audio(monkeypatch):
+    """The bound mustn't cut a healthy drain short: a write that takes
+    ~0.3 s for 0.5 s of audio is waited for in full."""
+    _install_fake_sounddevice(monkeypatch, stream_cls=_BlockingFakeRawOutputStream)
+    from companion.audio import playback as pb
+
+    playback = pb.SpeakerPlayback(sample_rate=16000)
+    stream = _BlockingFakeRawOutputStream.instances[0]
+    await playback.play(b"\x00\x00" * 8000)  # 0.5 s of audio
+    await asyncio.to_thread(stream.write_started.wait, 2.0)
+
+    async def release_later():
+        await asyncio.sleep(0.3)
+        stream.release.set()
+
+    releaser = asyncio.create_task(release_later())
+    await playback.wait_drained()
+    await releaser
+
+    assert stream.written == [b"\x00\x00" * 8000]
+    playback.close()

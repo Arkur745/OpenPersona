@@ -673,12 +673,16 @@ class Orchestrator:
         try:
             while True:
                 # --- listening -> user speaking: accumulate until end-of-utterance ---
+                # DEBUG lines mark each state, so a stall shows where it stopped
+                # (`python -m companion --debug`).
+                logger.debug("voice: listening")
                 self.stt.reset()
                 transcript = ""
                 user_has_spoken = False
                 while True:
                     stream_ended, chunk_transcript, is_speech = await events.get()
                     if stream_ended:
+                        logger.debug("voice: mic stream ended; session over")
                         return  # mic stream ended before any utterance completed
                     if chunk_transcript is not None:
                         transcript = chunk_transcript
@@ -690,7 +694,9 @@ class Orchestrator:
                         break  # was speaking, now silent long enough -> end of utterance
 
                 if not transcript.strip():
+                    logger.debug("voice: speech detected but nothing transcribed")
                     continue  # VAD triggered but STT captured nothing meaningful
+                logger.debug("voice: heard %r", transcript)
 
                 # --- processing: query memory, dedup, build the prompt ---
                 retrieved_memory = await self.memory.query(
@@ -731,6 +737,7 @@ class Orchestrator:
                             await events.put((True, None, None))
                             return
                         if is_speech:
+                            logger.debug("voice: barge-in, stopping the reply")
                             self.stop_speaking()
                             if on_playback_interrupt is not None:
                                 on_playback_interrupt()
@@ -738,7 +745,9 @@ class Orchestrator:
                             return
 
                 watcher = asyncio.create_task(watch_for_barge_in())
-                if self.agent is not None and self.agent.handles(persona):
+                uses_agent = self.agent is not None and self.agent.handles(persona)
+                logger.debug("voice: responding (%s)", "agent" if uses_agent else "plain LLM")
+                if uses_agent:
                     source = self._sentences_from_agent(persona, user_id, built, interrupted)
                 else:
                     source = _as_answer(self._sentences_from_llm(built.prompt, built.context))
@@ -754,6 +763,8 @@ class Orchestrator:
                         async for sentence, is_filler in sentences:
                             if not is_filler:  # fillers are spoken, never remembered
                                 response_sentences.append(sentence)
+                            logger.debug("voice: speaking %s%r",
+                                         "filler " if is_filler else "", sentence)
                             if interrupted.is_set():
                                 break
                             async for audio_chunk in self.tts.synthesize_stream(sentence):
@@ -767,6 +778,7 @@ class Orchestrator:
                         # Keep the watcher alive through the real playback
                         # tail — finishing synthesis+yielding doesn't mean
                         # the audio has actually finished sounding yet.
+                        logger.debug("voice: waiting for playback to finish")
                         await wait_for_playback_drained()
                 finally:
                     # Safe to cancel: `watcher` only ever awaits events.get()
@@ -783,6 +795,8 @@ class Orchestrator:
                     _trim_to_last(recent_turns, max_recent)
                     await self._write_turn_safely(user_id, persona.id, assistant_turn)
                 self._schedule_summarization(user_id, persona.id)
+                logger.debug("voice: turn done (%s)",
+                             "interrupted" if interrupted.is_set() else "finished")
 
                 # -> [interrupted -> listening] or [finished -> listening]: loop.
         finally:
