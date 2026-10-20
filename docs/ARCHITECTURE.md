@@ -2,10 +2,14 @@
 
 ## Status
 
-This describes the target shape of the local-first core (build-order
-phase 1). Cloud backend adapters, hosted demo infra, and auth/billing are
-explicitly out of scope until phase 1 is working end-to-end — see
-"Build order" below.
+The local-first core is built and runs end to end: text, voice (with
+barge-in) and a Streamlit UI, five agentic personas with tools, Chroma or
+MemArk memory, and rolling summarization. This document describes how it
+works as built (last reviewed 2026-10-19). Cloud backends, hosted infra
+and auth/billing don't belong in this repo: the deployed version is a
+separate project. See "Build order" below. The reasons behind the
+main choices are collected in `DECISIONS.md` at the repo root (D1–D31);
+this document describes the mechanics.
 
 ## Principles
 
@@ -14,8 +18,9 @@ explicitly out of scope until phase 1 is working end-to-end — see
    `VoiceActivityDetector`, `MemoryStore`. Everything outside
    `companion/backends/` and `companion/memory/` (orchestrator,
    prompt_builder, UI) depends only on these interfaces, never on a
-   concrete implementation. This is what lets a future cloud STT/LLM/TTS
-   adapter drop in later without touching the orchestrator.
+   concrete implementation. That's what makes backends swappable through
+   config alone (and what will let the separate deployed version plug in
+   other backends without forking the orchestrator).
 2. **Config-driven backend selection.** `companion/config/config.example.yaml`
    is the *only* place a backend is chosen by name. There is no `if
    config.stt == "whisper"` branching anywhere else — the app reads config
@@ -33,8 +38,15 @@ explicitly out of scope until phase 1 is working end-to-end — see
    generated the turns it stores.
 4. **No mandatory external services for the local-first path.** STT/TTS/VAD
    run in-process; the LLM talks to a local Ollama server (which the user
-   runs, but which is not a *cloud* dependency); memory uses an embedded
-   vector DB (Chroma or LanceDB) with no separate DB server to stand up.
+   runs, but which is not a *cloud* dependency); memory is embedded (Chroma,
+   or MemArk's SQLite graph) with no separate DB server to stand up. The
+   only network-using features are the agent tools `web_search` and
+   `weather`, off unless `agent.options.allow_network: true`.
+   `scripts/check_offline.py` checks this by blocking non-localhost
+   connections and running every configured backend for real.
+5. **Tools are opt-in per persona.** A persona becomes an agent only by
+   listing `tools:` in its YAML; no persona needs code, and personas
+   without tools never touch the agent stack. See "Agentic personas".
 
 ## Data flow (one turn)
 
@@ -91,28 +103,43 @@ caller passes `recent_turns` fresh each call), while `handle_voice_turn`
 tracks its own `recent_turns` across a whole session — see "Voice-turn
 state machine" below.
 
+Two additions to this flow:
+- **Personas with tools:** the `LLMBackend.generate_stream` box is
+  replaced by the agent (`AgentRunner.run_stream`), which may call tools
+  before answering. Everything before and after is identical, and memory
+  still receives only the user message and the final answer. See "Agentic
+  personas".
+- **After the memory writes:** `RollingSummarizer.summarize_if_due` is
+  scheduled as a background task, never awaited by the turn. See "Rolling
+  summarization" under MemoryStore.
+
 ## Directory layout
 
 ```
 companion/
-  __main__.py           # `python -m companion` — thin CLI shim, dispatches on config.mode
-  app.py                 # shared bootstrap: config -> real backends -> Orchestrator; text loop
-  voice_app.py            # voice-mode bootstrap: real audio I/O -> Orchestrator; voice loop
-  audio/                  # MicCapture (capture.py) + SpeakerPlayback (playback.py), sounddevice-backed
+  __main__.py            # `python -m companion`: thin CLI shim, dispatches on config.mode
+  app.py                 # shared bootstrap: config -> real backends -> Orchestrator; text loop; reminders
+  voice_app.py           # voice-mode bootstrap: real audio I/O -> Orchestrator; voice loop
+  audio/                 # MicCapture (capture.py) + SpeakerPlayback (playback.py), sounddevice-backed
   core/
-    interfaces/       # the five abstract contracts + shared value types (Turn, Persona)
-    orchestrator/      # composes the interfaces into the turn loop above
-    prompt_builder/    # the one place persona + memory + context get assembled into a prompt
-    persona_loader/     # loads + validates personas/*.yaml into Persona
+    interfaces/          # the five abstract contracts + shared value types (Turn, Persona)
+    orchestrator/        # composes the interfaces into the text and voice turn loops
+    prompt_builder/      # the one place persona + memory + context get assembled into a prompt
+    persona_loader/      # loads + validates personas/*.yaml into Persona
+    agent/               # AgentRunner protocol + events (TextDelta, ToolStarted, ToolFinished)
   backends/
     stt/, tts/, llm/, vad/   # concrete implementations of the interfaces
-  personas/            # *.yaml persona configs + schema.md
-  memory/              # MemoryStore implementation (embedded vector DB) + rolling summarizer
-  config/              # config.example.yaml + loader.py (config.yaml -> AppConfig)
-  ui/                  # text + voice client (framework not yet decided)
+    agent/               # LangGraphOllamaAgent: the only LangGraph/LangChain code
+  tools/                 # persona tools (plain async functions), registry, SQLite store (notes, reminders)
+  memory/                # Chroma store (store.py), MemArk SQLite graph store, RollingSummarizer
+  memark/                # MemArk retrieval adapter + vendored engine (_vendor/, unmodified)
+  personas/              # *.yaml persona configs + schema.md
+  config/                # config.example.yaml + loader.py (config.yaml -> AppConfig)
+  ui/                    # streamlit_app.py: browser UI (text + push-to-talk voice)
+scripts/                 # check_offline.py, benchmark_latency.py, benchmark_memory_backends.py
 docs/
 tests/
-legacy/                # archived prior Node/React project — not part of this codebase, do not build on it
+legacy/                  # archived prior Node/React project; not part of this codebase, do not build on it
 ```
 
 ## Build order
@@ -139,9 +166,9 @@ second `SpeechToText` implementation:
 - **Audio format contract.** `transcribe_stream(audio_chunk: bytes)` assumes
   mono 16 kHz 16-bit signed little-endian PCM. This isn't stated in the
   abstract interface itself (which stays format-agnostic on purpose), but
-  every concrete implementation in this codebase — STT here, VAD once
-  implemented — needs to agree on one format so the (not yet built) mic
-  capture layer doesn't have to convert per-backend. If you add a backend
+  every concrete implementation in this codebase — STT and VAD — agrees on
+  one format, so the mic capture layer (`companion/audio/capture.py`)
+  doesn't have to convert per backend. If you add a backend
   that needs a different format, that's a real conflict to resolve, not
   something to silently paper over with a per-backend conversion.
 - **"Streaming" here means buffered re-transcription, not incremental
@@ -203,6 +230,11 @@ second `SpeechToText` implementation:
   adding it needs no change to `TextToSpeech`, `Persona`, or
   personas/schema.md's shape, only a policy decision about voice-cloning
   consent tracking, which is a product question, not a technical one.
+- **Single-speaker Coqui models** (e.g. `tts_models/en/ljspeech/vits`)
+  reject any speaker name, so a persona selects their only voice with
+  `voice_id: coqui:default`; `CoquiTTS.from_voice_id` maps it to no
+  speaker. Found by running `scripts/check_offline.py` with Coqui, which
+  now passes with that model.
 - **`espeak-ng`** (a system binary, not a Python package) is required at
   runtime by some stock Coqui models' phonemizers — not by Piper, and not
   by XTTS. See THIRD_PARTY_LICENSES.md.
@@ -232,8 +264,8 @@ second `SpeechToText` implementation:
   and `_pump_mic`), not the VAD backend — see "Voice-turn state machine"
   below. 512 samples (32ms) at 16 kHz also happens to be a perfectly fine
   chunk size for `FasterWhisperSTT` (which accepts anything), so
-  standardizing mic-capture chunking on that value — once a real
-  mic-capture layer exists (Section 3.1, not yet built) — satisfies both
+  standardizing mic-capture chunking on that value (as
+  `companion/audio/capture.py`'s `MicCapture` does) satisfies both
   backends without either dictating the other's format.
 - **`is_speech()` debounces internally**, close to Silero's own
   `VADIterator` reference implementation (verified against its source):
@@ -327,13 +359,12 @@ touching `mic_audio` directly. `_pump_mic` itself is only cancelled when
 
 ### Known limitations (not solved here, deliberately)
 
-- **Barge-in stops being watched for once response audio has finished
-  *yielding*, not once it's finished *playing*.** If the caller's actual
-  audio playback of the last chunk(s) takes noticeably longer than
-  synthesis did — plausible, since synthesis can outrun real-time
-  playback — there's a window where the user could start talking during
-  playback without it registering. Fixing this needs the caller to signal
-  "done playing" back to the orchestrator, which doesn't exist yet.
+- ~~**Barge-in stops being watched for once response audio has finished
+  *yielding*, not once it's finished *playing*.**~~ **Fixed since:**
+  `handle_voice_turn`'s `on_playback_interrupt` / `wait_for_playback_drained`
+  hooks, driven by `SpeakerPlayback`, keep the watcher alive through real
+  playback. See "The real playback-latency barge-in fix" under "Voice mode
+  audio I/O" below.
 - **`VoiceActivityDetector` has no `frame_bytes` in its abstract
   interface** — only concrete `SileroVAD` exposes one. `handle_voice_turn`
   duck-types it (`getattr`) and fails loudly if missing, rather than
@@ -395,7 +426,13 @@ missing/empty required fields, an `id` that isn't filesystem/URL-safe, a
 `voice_id` that isn't shaped `<namespace>:<value>`, unknown fields (a
 typo'd field name is silently ignored otherwise), a non-list-of-strings
 `example_dialogue`, and duplicate `id`s across files in the same
-directory (since `get()` looks up by id).
+directory (since `get()` looks up by id). The optional agent fields are
+checked for shape too: `tools` must be a list of distinct tool-like names
+(lowercase, digits, `_`) and `filler_phrases` a list of non-empty strings.
+Whether each tool name actually exists is checked at app startup against
+`companion/tools/registry.py` (`validate_persona_tools`, called from
+`app.load_personas`), which keeps this loader independent of the tools
+layer.
 
 **Deliberately not this loader's job**: validating that a `voice_id`'s
 namespace (`piper:`, `coqui:`, ...) is one a given deployment's TTS
@@ -407,7 +444,11 @@ name. This loader only validates the shape, not the namespace.
 ## MemoryStore (implemented — two backends now)
 
 Two real, config-selectable `MemoryStore` implementations exist and are
-both wired into `companion/app.py`'s `build_memory`:
+both wired into `companion/app.py`'s `build_memory`. The interface has
+five methods: `query`, `write` and `delete`, plus `list_turns` (every
+stored turn in a scope, oldest first) and `replace_turns` (all-or-nothing
+swap of old turns for one new turn), which were added for rolling
+summarization (`docs/ROLLING_SUMMARIZER.md`).
 
 ### Chroma (`companion/memory/store.py`'s `VectorMemoryStore`) — default
 
@@ -435,9 +476,10 @@ choice, ordering, the dedup gap's resolution, write path). Short version:
   the user's message and the assistant's full reply as each turn
   finishes (voice mode accumulates the streamed sentences into one
   assistant turn first — see "Voice-turn state machine" below).
-  `RollingSummarizer` (`companion/memory/summarizer.py`) stays
-  unimplemented/unwired — reads/rewrites turns after they're already in
-  `MemoryStore`, out of scope for this pass.
+  `RollingSummarizer` (`companion/memory/summarizer.py`) works on turns
+  after they're already in `MemoryStore`: a background job, triggered
+  after turns, that replaces the oldest raw turns with one summary turn
+  (via `list_turns`/`replace_turns`). See `docs/ROLLING_SUMMARIZER.md`.
 - **`delete()` is implemented for real** (it was already part of the
   abstract interface, not deferred) — per-persona or whole-user wipe.
   Automatic pruning/expiry policy and a UI affordance to call `delete()`
@@ -507,6 +549,41 @@ this project doesn't have).
   `docs/MEMARK_RETRIEVAL_ADAPTER.md` section 8 made about `write()`'s own
   failure-rollback question).
 
+### Rolling summarization (`companion/memory/summarizer.py`)
+
+Keeps long relationships with a persona from filling memory with raw
+turns. Full design: `docs/ROLLING_SUMMARIZER.md`.
+
+- **What it does:** once a `(user, persona)` scope holds
+  `memory.summarizer.trigger_turn_count` raw user/assistant turns
+  (default 50; 0 or missing = off), the oldest half are summarized by the
+  LLM into one third-person summary turn (`role="system"`, timestamped at
+  the newest turn it replaced) and swapped in through `replace_turns`.
+  Summary turns aren't counted and are never re-summarized.
+- **Never on the request path:** `Orchestrator` (CLI text and voice)
+  schedules `summarize_if_due` as a background task after each turn's
+  memory writes, at most one per scope at a time; failures are logged and
+  never reach the conversation. Streamlit runs each turn under its own
+  `asyncio.run`, so it builds its `Orchestrator` without a summarizer and
+  calls it itself after the reply has rendered (on a due turn, the next
+  message can wait a few seconds).
+- **Safe against deletes:** `replace_turns` changes nothing and returns
+  False if any of the old turns is gone (e.g. `delete()` ran meanwhile),
+  so a summary can't resurrect erased memory. MemArk does the swap in one
+  SQLite transaction, under a store-wide lock that also covers `write()`
+  and `delete()` (the summarizer made concurrent writes possible).
+  Chroma has no transactions, so it adds the summary before deleting the
+  old turns: a crash in between leaves duplicates, never a gap.
+- **Its own LLM instance** (`app.build_summarizer`), always with the base
+  `llm.options`, never the voice override, whose short-reply settings
+  would truncate a summary.
+- **The prompt lives in summarizer.py, not PromptBuilder:** it assembles
+  no persona, memory or conversation window, which is what PromptBuilder
+  is for.
+- **Verified** with a fake LLM against real Chroma and MemArk stores,
+  including across processes. Summary *quality* with a real model is not
+  measured.
+
 ### Persistence across real process restarts (both backends)
 
 `tests/test_memory_persistence_across_processes.py` runs each step in a
@@ -561,9 +638,10 @@ and "Voice mode audio I/O" below for the voice-specific pieces.
   calls the selected backend's `from_voice_id(persona.voice_id, ...)`
   once, after a persona is selected, per the "Persona voice binding" note
   above.
-- **Persona selection has no UI yet** — `select_persona()` takes an
+- **Persona selection**: in the CLI, `select_persona()` takes an
   explicit `--persona <id>` if given, else the first persona
-  `PersonaLoader.load_all()` returns (alphabetical by filename). Memory's
+  `PersonaLoader.load_all()` returns (alphabetical by filename); the
+  Streamlit UI has a sidebar picker. Memory's
   `user_id` similarly has no auth system behind it (out of scope per this
   project's brief) — `--user-id` defaults to `"local"`.
 - **`llm.voice_mode_override`** (a gap found while wiring real backends,
@@ -574,7 +652,19 @@ and "Voice mode audio I/O" below for the voice-specific pieces.
   single `llm` with no mode branch. Only `options` can be overridden: a
   `backend` key there is rejected, since switching LLM backends by mode
   isn't supported. The Streamlit UI's push-to-talk goes through
-  `handle_text_turn` and uses the base options.
+  `handle_text_turn` and uses the base options. The example config ships
+  the override commented out (since 2026-10-20), so voice mode uses the
+  main 7B model; its comment suggests the Apache-2.0
+  `qwen2.5:1.5b-instruct` for CPU-only machines. It previously named
+  `qwen2.5:3b-instruct`, which turned out to be research-licensed (see
+  THIRD_PARTY_LICENSES.md).
+- **Optional pieces, each off when its config is absent:**
+  `build_agent` (the `agent:` section; personas with tools),
+  `build_summarizer` (`memory.summarizer.trigger_turn_count`), and
+  `take_due_reminders` (polled by the text loop, the voice loop and the
+  Streamlit UI whenever an agent is configured). `load_personas` also
+  checks every persona's tool names against the tool registry, so a typo
+  fails at startup rather than mid-conversation.
 - **Errors are actionable, not raw tracebacks**: `__main__.py`'s `main()`
   wraps the whole run in one `except Exception`, printing `str(exc)` and
   exiting 1 (`--debug` re-raises for a full traceback) — this works
@@ -921,4 +1011,27 @@ future model or library version brings that bug back, the pre-filter in
   verified — same "can't claim tested without a real browser/mic" honesty
   standard `companion/audio/`'s own testing-reality-check already holds
   the CLI's real mic/speaker code to. Not treated as the final or only UI
-  this project will ever have — see `companion/ui/README.md`.
+  this project will ever have — see `companion/ui/README.md`. Since
+  2026-10-19 the agentic personas show here too: a "Tools: ..." caption,
+  a "Used tools" status box per reply, and reminder toasts via an
+  `st.fragment(run_every=20)` poll.
+- **Next UI (decided 2026-10-19, not started): a React frontend.** It
+  needs a local API server first (HTTP plus a WebSocket for streaming
+  text and audio), since Streamlit calls `Orchestrator` in-process and a
+  browser app can't. That server is also what makes hands-free real-time
+  voice in the browser possible. It stays local, with no auth or cloud,
+  and should be designed so the separate deployed version can reuse the
+  same protocol. What has to happen first:
+  1. Manual testing of the current build (`DECISIONS.md` D28).
+  2. The user decides the open choices: frontend framework and build
+     tool, state management, API shape, and the server library (none
+     chosen yet; don't pick unilaterally).
+  3. The server reuses `companion/app.py`'s `build_*` /
+     `build_orchestrator` and calls `Orchestrator` exactly as the CLI and
+     Streamlit do, rather than a new construction path. One thing the
+     Streamlit app does itself has to move into shared code the server
+     can call: running the summarizer after a reply. Reminder polling
+     (`take_due_reminders`) is already shared.
+  4. The voice path needs its own design: streaming browser mic audio
+     into `handle_voice_turn` over the WebSocket, with playback hooks
+     standing in for `SpeakerPlayback`.

@@ -83,7 +83,7 @@ class PromptBuilder:
         Grounds the model in `persona` first, then folds in retrieved
         memory (rendered as prose, most-relevant-first, bounded to
         `max_memory_turns`) — omitted entirely if `retrieved_memory` is
-        empty, which is always true until build-order step 8 lands.
+        empty (e.g. a user's first conversation with a persona).
         `recent_turns` is bounded to the most recent `max_recent_turns`
         (chronological order preserved, oldest of the kept turns first)
         and returned as `context` with `user_message` appended as the

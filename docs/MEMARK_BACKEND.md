@@ -372,7 +372,8 @@ Where MemArk's real, honestly-earned strength shows up — multi-hop
 evidence chains, resisting context contamination — is long,
 information-dense, entity-and-relation-heavy conversation, closer to a
 research-assistant persona than this project's existing three starter
-personas (mentor/friend/companion), which trend emotionally continuous
+personas at the time (mentor/friend/companion; `study_buddy` and
+`planner` were added later), which trend emotionally continuous
 rather than fact-dense. Run through ordinary daily companion chat, the
 existing personas likely wouldn't exercise MemArk's strength at all, and
 a straight A/B against Chroma could make MemArk look strictly worse —

@@ -184,15 +184,18 @@ shrapnel.
 **Interaction with `summarizer.py`**: none, deliberately, in this pass.
 `RollingSummarizer.summarize_if_due()` operates on turns *after* they're
 already in `MemoryStore` — collapsing old ones into a summary turn once
-`trigger_turn_count` is crossed — and stays unimplemented and
-uninvoked here; this pass doesn't wire it into the per-turn write path or
-decide when/how it gets triggered (a scheduler? checked opportunistically
-after each turn? both are open). The one thing this pass does commit to,
-because `summarizer.py` will need it later: the Chroma metadata schema
-per stored turn is documented and stable (`role`, `text` as the document
-body, `timestamp` as ISO-8601 metadata) so a future summarizer can read
-raw turns back out and rewrite a collapsed summary turn through the same
-`write()`/`delete()` surface, rather than needing its own storage access.
+`trigger_turn_count` is crossed. This pass committed only to a stable
+Chroma metadata schema per stored turn (`role`, `text` as the document
+body, `timestamp` as ISO-8601 metadata) so a summarizer could read raw
+turns back out later.
+
+> **Update (2026-10-19): the summarizer is built**, and the guess above
+> that it could work through the existing `write()`/`delete()` surface
+> turned out wrong. `delete()` only wipes whole scopes, and there was no
+> way to list a scope's turns. `MemoryStore` gained two methods,
+> `list_turns` and an all-or-nothing `replace_turns`, implemented for
+> Chroma and MemArk. It runs as a background task after each turn. Full
+> design: `docs/ROLLING_SUMMARIZER.md`.
 
 ## 6. Out of scope for this pass (confirmed real, not blocking)
 

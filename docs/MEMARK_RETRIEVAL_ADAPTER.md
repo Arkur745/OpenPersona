@@ -8,6 +8,16 @@ as-shipped summary. The design below (sections 1-8) is left as
 originally written and approved; nothing in it changed on the way to
 shipping.
 
+> **Later addition (2026-10-19):** for rolling summarization the adapter
+> also implements `MemoryStore.list_turns` and `replace_turns`. The swap
+> is one SQLite transaction (`MemArkGraphStore.replace_nodes_sync`),
+> after which the in-memory scope is dropped and re-hydrated, the same way
+> `delete()` works. A store-wide `threading.Lock` now covers `write()`,
+> `replace_turns()` and `delete()`, because a background summary made
+> concurrent writes to one scope possible. `write()` moved to a single
+> `to_thread` call via the new public `MemArkGraphStore.save_node_sync`.
+> See `docs/ROLLING_SUMMARIZER.md` section 6.2.
+
 Same gate as every prior MemArk note. This is the last piece before
 `MemArkGraphStore` (persistence, already implemented and tested per
 `docs/MEMARK_PERSISTENCE.md`) can become a real `MemoryStore` and get

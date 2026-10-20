@@ -3,11 +3,14 @@
 **Status: implemented**, per the decisions below — Option A confirmed,
 memory renders into the prompt string, turn-count + character-cap
 bounding. `companion/core/prompt_builder/prompt_builder.py` implements
-this; `companion/core/interfaces/memory_store.py` is unchanged, as
-predicted — real `MemoryStore` (build-order step 8, see
-docs/MEMORY_STORE.md) has since landed and validated this seam without
-needing any change to `PromptBuilder` itself, confirming the assumption
-this note made in advance of that.
+this; `MemoryStore.query()` is unchanged, as predicted — real
+`MemoryStore` (build-order step 8, see docs/MEMORY_STORE.md) has since
+landed and validated this seam without needing any change to
+`PromptBuilder` itself, confirming the assumption this note made in
+advance of that. (The interface later gained `list_turns`/
+`replace_turns` for rolling summarization, which `PromptBuilder` doesn't
+use. A summary turn has `role="system"` and renders in the memory
+section as `(system)`, like any other retrieved turn.)
 
 Two refinements were found while actually implementing against this note
 — both are noted inline below where they change the "concretely" shape,

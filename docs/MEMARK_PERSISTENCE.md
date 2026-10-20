@@ -5,6 +5,11 @@
 adapter pass, wired into a real, selectable `MemoryStore` backend — see
 `docs/ARCHITECTURE.md`'s "MemoryStore" section. The design below is left
 as originally written; nothing in it changed on the way to shipping.
+Later (2026-10-19), rolling summarization added two public methods:
+`save_node_sync` (the synchronous body of a node write) and
+`replace_nodes_sync` (insert one summary node and delete the old nodes
+and their edges in a single SQLite transaction). See
+`docs/ROLLING_SUMMARIZER.md` section 6.2.
 
 Same gate as every prior MemArk note. This is the P0 prerequisite
 `docs/MEMARK_COMPANION_EXTENSIONS.md` section 1 identified: without it,

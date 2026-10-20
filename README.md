@@ -14,10 +14,16 @@ LLM, VAD, the persona loader, `MemoryStore`, and real mic/speaker audio
 I/O are all implemented; `python -m companion` reads config, constructs
 real backends, and runs an actual conversation with memory — text or
 voice, picked by `config.yaml`'s `mode:` — see "Running the app" below.
-A real browser UI (Streamlit: text chat plus push-to-talk voice) is also
-available as an alternative to the terminal — see "Streamlit UI" below.
-See `docs/ARCHITECTURE.md` for the design and the build order, and the
-root `CLAUDE.md` for exactly what's implemented vs. not.
+Also built:
+- five agentic personas with tools (see "Agentic personas");
+- rolling summarization of long-term memory (see "Memory summarization");
+- a browser UI (Streamlit: text chat plus push-to-talk voice; see
+  "Streamlit UI").
+
+Measured latency on a laptop GPU is about 0.85 s from the end of your
+speech to the first spoken audio (`docs/HARDWARE_REQUIREMENTS.md`). See
+`docs/ARCHITECTURE.md` for the design, and the root `CLAUDE.md` for
+exactly what's implemented vs. not.
 
 ## Stack (local-first phase)
 
@@ -25,7 +31,7 @@ root `CLAUDE.md` for exactly what's implemented vs. not.
 - LLM: [Ollama](https://ollama.com), config-selectable model
 - TTS: [Piper](https://github.com/rhasspy/piper) (optional higher-fidelity: [Coqui/XTTS-v2](https://github.com/idiap/coqui-ai-TTS), incl. future voice cloning)
 - VAD: [Silero VAD](https://github.com/snakers4/silero-vad)
-- Memory: [Chroma](https://www.trychroma.com/) (embedded, no external DB server; LanceDB named as a future alternative, not yet implemented) — an experimental MemArk graph-memory backend is also wired in, see "Memory backend" below
+- Memory: [Chroma](https://www.trychroma.com/) (embedded, no external DB server; LanceDB named as a future alternative, not yet implemented) — an experimental MemArk graph-memory backend is also wired in, see "Memory backend" below; older turns are rolled up into summaries in the background
 - Agents: [LangGraph](https://github.com/langchain-ai/langgraph) tool-calling loop over Ollama (`qwen2.5:7b-instruct` by default), see "Agentic personas" below
 
 A deployed, cloud-hosted version is planned as a **separate project**,
@@ -39,17 +45,24 @@ not part of this repo — nothing here talks to a cloud service. See
 This is genuinely runnable, end to end, with just:
 
 ```
-pip install -e ".[dev,memory-chroma]"
+pip install -e ".[dev,memory-chroma,agents]"
 ```
 
 (STT/TTS/VAD get constructed too but text mode never calls into them, so
 their extras — `stt-whisper`, `tts-piper`, `vad-silero` — aren't needed
 just to talk to a persona in text mode; add them for voice mode, below.
-`llm-ollama`'s dependencies are already covered by `dev`.)
+`llm-ollama`'s dependencies are already covered by `dev`. `agents` is
+needed because the example config turns agentic personas on; without it
+startup stops with a clear "needs the agents extra" error. To run without
+agents instead, delete the `agent:` section from your `config.yaml`.)
 
-Then, with [Ollama](https://ollama.com) installed and running and at
-least one model pulled (`ollama pull llama3` or whichever model you'd
-rather use):
+Then, with [Ollama](https://ollama.com) installed and running and the
+default model pulled (it supports tool calling, which agentic personas
+need):
+
+```
+ollama pull qwen2.5:7b-instruct
+```
 
 ```
 cp companion/config/config.example.yaml companion/config/config.yaml
@@ -62,7 +75,7 @@ python -m companion
 
 You'll be talking to whichever persona loads first from
 `companion/personas/` (override with `--persona mentor`/`friend`/
-`companion`). Type `exit` to quit. Useful flags: `--persona <id>`,
+`companion`/`study_buddy`/`planner`). Type `exit` to quit. Useful flags: `--persona <id>`,
 `--user-id <id>` (memory is scoped per user+persona; defaults to
 `local`), `--config <path>` (default: `config.yaml` if you've created
 one, else `config.example.yaml` itself — so `python -m companion` with
@@ -119,7 +132,7 @@ hands-free experience — Streamlit's per-interaction model doesn't fit
 that without a much bigger rework).
 
 ```
-pip install -e ".[dev,memory-chroma,ui-streamlit]"
+pip install -e ".[dev,memory-chroma,agents,ui-streamlit]"
 # (same config.yaml setup as Text mode above, if you haven't already)
 
 streamlit run companion/ui/streamlit_app.py
@@ -130,10 +143,13 @@ the sidebar dropdown (switching rebuilds just that persona's voice
 binding, not the whole app — cheap), set a `User ID` if you want a
 different memory scope than `local`, and chat. "Clear chat window"
 resets only what's shown on screen, not your companion's actual
-long-term memory.
+long-term memory. For a persona with tools, a "Tools: ..." caption
+shows under its name, a collapsed "Used tools" box appears above any
+reply that used one, and due reminders pop up as toasts without you
+typing anything.
 
 **Voice input**: install `stt-whisper` too
-(`pip install -e ".[dev,memory-chroma,ui-streamlit,stt-whisper]"`) and a
+(`pip install -e ".[dev,memory-chroma,agents,ui-streamlit,stt-whisper]"`) and a
 🎤 recorder appears above the message box — record a clip, it's
 transcribed and sent exactly like a typed message.
 
@@ -150,10 +166,11 @@ Everything above, plus real STT/TTS/VAD models and a real microphone +
 speaker:
 
 ```
-pip install -e ".[dev,memory-chroma,stt-whisper,tts-piper,vad-silero,audio-sounddevice]"
+pip install -e ".[dev,memory-chroma,agents,stt-whisper,tts-piper,vad-silero,audio-sounddevice]"
 ```
 
-Two extra things voice mode needs that text mode doesn't:
+Two extra things voice mode needs that text mode doesn't, plus one
+option:
 
 1. **A real voice file for whichever persona you talk to.** The starter
    personas' `voice_id`s (e.g. `piper:en_US-mentor-medium`) are
@@ -167,6 +184,13 @@ Two extra things voice mode needs that text mode doesn't:
    `16000`); leave `input_device`/`output_device` as `null` to use your
    system's default mic/speakers, or run `python -m sounddevice` to list
    devices and pick specific ones.
+3. **Optionally, a lighter voice model.** By default voice mode uses
+   the same `qwen2.5:7b-instruct` as text mode (about 0.85 s to first
+   audio on a laptop GPU). On a CPU-only machine, uncomment
+   `llm.voice_mode_override` in `config.yaml` to use
+   `qwen2.5:1.5b-instruct` instead (Apache-2.0; `ollama pull
+   qwen2.5:1.5b-instruct` first). Personas with tools always use the
+   `agent:` model.
 
 Then:
 
@@ -175,6 +199,9 @@ python -m companion
 ```
 
 Speak, pause, and the persona replies out loud — press Ctrl+C to quit.
+With a persona that has tools, you'll hear a short filler line ("Let me
+check.") while a tool runs, and you can talk over it at any point to
+interrupt. Due reminders are spoken before the next reply.
 Same `--persona`/`--user-id`/`--config`/`--debug` flags as text mode. If
 no microphone/speaker is available (e.g. running headless), or the
 configured sample rate doesn't match `vad.options.sample_rate`, you get a
@@ -223,6 +250,17 @@ stored. If `memory-memark`'s extras aren't installed, selecting this
 backend fails with a clear import error at startup, before any
 conversation loop runs, not partway through one.
 
+### Memory summarization
+
+Long conversations don't pile up forever as raw turns. Once a persona's
+memory for you holds `memory.summarizer.trigger_turn_count` turns (50 by
+default), the oldest half are summarized by the LLM into one summary turn
+in the background, after a reply, so it never slows a reply down. Set it
+to `0` to turn it off. Works with both memory backends. Design and safety
+details (e.g. a summary can't bring back memory you deleted) are in
+`docs/ROLLING_SUMMARIZER.md`. It's tested with a fake LLM against real
+stores; summary quality with a real model isn't measured yet.
+
 ### Memory survives restarts (and how that's tested)
 
 Both backends persist to `persist_dir` and pick up where they left off on
@@ -249,7 +287,9 @@ This blocks every non-localhost connection and DNS lookup at Python's
 socket layer, then runs each configured backend for real: an Ollama
 reply, write + query on both memory backends, and a real audio round
 trip. TTS speaks a sentence, Silero VAD detects the speech in it, and
-faster-whisper transcribes it back. It lists any connection attempts it
+faster-whisper transcribes it back. If the config has an `agent:`
+section, the agent model also makes one real tool call (the calculator).
+It lists any connection attempts it
 blocked. faster-whisper tries `huggingface.co` to check for model
 updates, then falls back to its local cache. Backends whose extras
 aren't installed are reported as SKIP. Limit: native code that opens its
@@ -264,9 +304,19 @@ through it.
 See `docs/CONTRIBUTING.md` for the full contributor setup and
 `docs/PERSONA_AUTHORING.md` to add a persona (no code changes required).
 
+### Performance
+
+Measured on an i7-12700H laptop with an RTX 3060 (6 GB): about 0.85 s
+from the end of your speech to the first audio in voice mode, 7–8B
+models at about 35 tokens/s, and tool-using replies under 2 s. Numbers,
+CPU-only estimates and how to measure your own machine
+(`scripts/benchmark_latency.py`): `docs/HARDWARE_REQUIREMENTS.md`.
+
 ## Repo layout
 
-See `docs/ARCHITECTURE.md`. `legacy/` contains an archived, unrelated prior
+See `docs/ARCHITECTURE.md` for how it's built and `DECISIONS.md` for why
+(every settled design decision, with its reasoning). Each package's
+`__init__.py` docstring is a short guide to that package. `legacy/` contains an archived, unrelated prior
 project (a Node/React text-chat app) kept for reference only — it is not
 part of this codebase.
 

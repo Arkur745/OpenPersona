@@ -1,4 +1,16 @@
-# MemArk companion-domain extensions — design note (proposal — not implemented)
+# MemArk companion-domain extensions — design note (partly implemented)
+
+> **Status (2026-10-19), item by item:**
+> - **Built:**
+>   - persistence, the section 1 prerequisite: `docs/MEMARK_PERSISTENCE.md`;
+>   - hybrid retrieval, section 2a: `docs/MEMARK_RETRIEVAL_ADAPTER.md` section 2;
+>   - the section 3 correction (the adapter uses `ActivationEngine`
+>     directly, never `RetrievalPipeline`).
+> - **Not built:**
+>   - decay-rate tuning (2b);
+>   - a companion-specific node type (2c);
+>   - the recall@k evaluation (section 4).
+> The rest of this note is the original proposal.
 
 Same gate as `docs/MEMARK_BACKEND.md`: design note only, nothing
 implemented. Builds directly on that note's finding — MemArk's own

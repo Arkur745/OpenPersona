@@ -5,13 +5,19 @@
 ```
 pip install -e ".[dev]"
 # add whichever backend extras you're working on, e.g.:
-pip install -e ".[stt-whisper,tts-piper,llm-ollama,vad-silero,memory-chroma]"
+pip install -e ".[stt-whisper,tts-piper,llm-ollama,vad-silero,memory-chroma,agents]"
 cp companion/config/config.example.yaml companion/config/config.yaml
 ```
 
+`agents` is needed with the example config, which turns agentic
+personas on (or delete its `agent:` section). Other extras:
+`memory-memark`, `tts-coqui`, `audio-sounddevice`, `ui-streamlit`,
+`tools-online`; see `pyproject.toml`.
+
 Ollama itself is a separate install (not a pip package) — see
-[ollama.com](https://ollama.com), then `ollama pull <model>` for whatever
-`config.yaml`'s `llm.options.model` names.
+[ollama.com](https://ollama.com), then `ollama pull qwen2.5:7b-instruct`
+(the default for both `llm.options.model` and `agent.options.model`; agent
+personas need a model with tool-calling support).
 
 Once that's done, `python -m companion` runs a real text-mode
 conversation — see README.md's "Running the app" for details and useful
@@ -51,6 +57,27 @@ Read `docs/ARCHITECTURE.md` first. In short:
   "audio backend" family the way STT/TTS/LLM/VAD/MemoryStore have one),
   so this is plain infrastructure, not a pattern to extend for a
   hypothetical second audio library unless one actually gets added.
+- Adding a **tool** for personas: a `build_*` function returning
+  `Tool`s in `companion/tools/` (plain async functions with
+  `Annotated[type, "description"]` parameters, no LangChain), one entry in
+  `companion/tools/registry.py`'s `TOOL_SPECS` (mark it
+  `requires_network=True` if it uses the internet; it's then off unless
+  `agent.options.allow_network` is true), and tests in
+  `tests/test_tools.py`. Personas opt in by listing it under `tools:`.
+- Changing **the agent loop itself**: `companion/backends/agent/
+  langgraph_ollama.py` is the only file that imports LangGraph or
+  LangChain. `Orchestrator` sees only the `AgentRunner` protocol in
+  `companion/core/agent/`. Read `docs/ARCHITECTURE.md`'s "Agentic
+  personas" section first, especially the voice-mode rules.
+- Changing **memory**: the `MemoryStore` interface
+  (`companion/core/interfaces/memory_store.py`) has five methods, and
+  both backends (`companion/memory/store.py` for Chroma,
+  `companion/memark/retrieval.py` for MemArk) must implement all of them.
+  Rolling summarization lives in `companion/memory/summarizer.py`
+  (`docs/ROLLING_SUMMARIZER.md`).
+- Anything that adds a **backend or an offline tool** should also get a
+  step in `scripts/check_offline.py`, which proves the app runs with the
+  network blocked. Network use must stay opt-in and off by default.
 - `legacy/` is an archived prior project (Node/React), kept for reference
   only. Do not add new code there and do not assume anything in it reflects
   current architecture.
@@ -73,3 +100,22 @@ pytest
 tests (does a given backend implementation honor its interface's contract)
 are especially valuable — prefer those over tests that assume one specific
 backend is installed, so CI doesn't require every optional dependency.
+
+Conventions:
+- Test logic against fakes; add one real smoke test per backend that
+  **skips** (`pytest.importorskip`, or `pytest.skip` when a model, server
+  or device is missing) rather than failing.
+- Anything that claims to survive a restart is tested across real
+  processes; see `tests/test_memory_persistence_across_processes.py`.
+- Voice-mode concurrency (`handle_voice_turn`): read
+  `tests/test_orchestrator_voice_turn.py`'s module docstring first, and
+  run that file several times, since its tests are timing-based.
+- `test_real_piper_*` downloads a voice on every run and can hang on a
+  slow network; deselect it with `-k "not test_real_piper"`.
+
+By hand, after models are downloaded:
+
+```
+python scripts/check_offline.py      # every configured backend, network blocked
+python scripts/benchmark_latency.py  # per-stage latency on your machine
+```

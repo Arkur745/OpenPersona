@@ -45,3 +45,7 @@ legacy/frontend4/
 Thumbs.db
 .vscode/
 .idea/
+
+# Local-only notes: agent guide and progress log (kept out of the repo)
+AGENTS.md
+PROGRESS.md

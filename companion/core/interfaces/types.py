@@ -26,8 +26,8 @@ class Persona:
     """In-memory representation of a persona config file (personas/*.yaml).
 
     Loading/validating YAML into this shape is the persona loader's job
-    (not implemented yet — see personas/schema.md); this type is the
-    contract the loader must produce and everything else consumes.
+    (`companion/core/persona_loader/`, see personas/schema.md); this type
+    is the contract the loader must produce and everything else consumes.
     """
 
     id: str

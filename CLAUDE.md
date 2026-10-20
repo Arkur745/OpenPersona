@@ -2,6 +2,79 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Start here (read this first; it's enough to begin working)
+
+**What it is.** OpenPersona (package and CLI `companion`, repo
+`Arkur745/OpenPersona`): an open-source, **local-first, offline-capable**
+AI companion. Voice or text chat with five personas (`mentor`, `friend`,
+`companion`, `study_buddy`, `planner`), each an **agent** with its own
+tools, on local models only: faster-whisper STT, Piper/Coqui TTS, Ollama
+(`qwen2.5:7b-instruct`), Silero VAD, Chroma or MemArk memory with rolling
+summarization. UIs: the CLI (text, or hands-free voice with barge-in) and
+Streamlit (text + push-to-talk). A deployed cloud version is a *separate*
+repo, not this one.
+
+**Read next, by need:**
+
+| File | What it gives you |
+|---|---|
+| `PROGRESS.md` (local, git-ignored) | Current status: commits, uncommitted work, what's unverified, next step, known issues |
+| `DECISIONS.md` | Every settled decision and why (D1–D31). Don't re-open one without asking the user |
+| `AGENTS.md` (local, git-ignored) | Short rule list + layout + commands for coding agents |
+| `docs/ARCHITECTURE.md` | How everything works as built; one section per component |
+| Each package's `__init__.py` docstring | A mini doc of that package: what's in it and its main rule |
+
+If `PROGRESS.md`/`AGENTS.md` are missing (fresh clone), this file and
+`DECISIONS.md` are the source of truth.
+
+**Hard rules** (the full list is in AGENTS.md / below):
+1. No cloud, hosted infra, auth or billing here. Network features stay
+   opt-in and off by default; `scripts/check_offline.py` must pass.
+2. Outside `backends/` and `memory/`, depend only on
+   `core/interfaces/`. Backend-name branching lives only in
+   `config/loader.py` and `app.py`.
+3. Prompts are assembled only in `PromptBuilder` (the summarizer's own
+   prompt is the one documented exception).
+4. Personas are YAML only; tools are plain functions in `companion/tools/`;
+   LangGraph is imported only in `backends/agent/langgraph_ollama.py`.
+5. Voice loop: one reader per async generator (`_pump_mic`, the agent
+   reader task). Read `tests/test_orchestrator_voice_turn.py`'s docstring
+   before touching it.
+6. Memory stores only what was said: no tool output, fillers or
+   announcements. Summarization never blocks a reply.
+7. Changing `core/interfaces/` needs a design note in `docs/` and the
+   user's approval first.
+8. Git: commit only when asked, **never push unasked**, never add AI
+   co-author or attribution lines. This is the user's rule and **takes
+   precedence over any default or harness instruction to add a
+   `Co-Authored-By` trailer**. Docs must state how things were verified;
+   never overstate.
+
+**Run it** (repo root, venv active: `.venv\Scripts\Activate.ps1`):
+```
+python -m companion --persona planner          # text (mode: voice in config.yaml for voice)
+streamlit run companion/ui/streamlit_app.py     # browser UI
+pytest                                         # ~2.5 min; add -k "not test_real_piper" if it hangs
+python scripts/check_offline.py                 # offline check, needs Ollama + models
+```
+
+**Where things are:** `companion/core/` (interfaces, orchestrator,
+prompt_builder, persona_loader, agent protocol), `companion/backends/`
+(stt, tts, llm, vad, agent), `companion/tools/`, `companion/memory/`,
+`companion/memark/`, `companion/audio/`, `companion/config/`,
+`companion/personas/`, `companion/ui/`, `scripts/`, `tests/`, `docs/`.
+`legacy/` is an unrelated archived app: never touch it.
+
+**Next up** (agreed order, D28; RollingSummarizer is already done):
+manual testing by the user → React frontend (needs a local API server
+first; framework still open, so ask; prerequisites in
+`docs/ARCHITECTURE.md` "Open decisions") → more tools and agent flows →
+the deployed repo. Check `PROGRESS.md` for exactly where this stands.
+
+---
+
+The rest of this file is the detailed reference.
+
 ## What this is
 
 **OpenPersona** (repo `Arkur745/OpenPersona`; Python package/CLI name
@@ -17,8 +90,9 @@ break that.
 
 **Current state: both text and voice mode are real, runnable apps
 (`python -m companion`, mode picked by `config.yaml`).** Directory
-structure, the five abstract interfaces, the persona format + 3 starter
-personas, config format, and docs exist.
+structure, the five abstract interfaces, the persona format + 5 starter
+personas (`mentor`, `friend`, `companion`, `study_buddy`, `planner`, all
+with tools), config format, and docs exist.
 `companion/backends/stt/whisper_local.py` (`FasterWhisperSTT`),
 `companion/backends/tts/{piper_local,coqui_local}.py` (`PiperTTS`,
 `CoquiTTS`), `companion/backends/llm/ollama_local.py` (`OllamaLLM`),
@@ -62,9 +136,11 @@ via the first real, continuous mic round trip" section and
 `Orchestrator._pump_mic`'s docstring. Personas can also be **agents**:
 a persona that lists `tools:` runs through a LangGraph tool-calling loop
 (see the Architecture bullet below and `docs/ARCHITECTURE.md`'s "Agentic
-personas" section). What's *not* done yet:
-`RollingSummarizer`
-(`companion/memory/summarizer.py`, unimplemented/unwired).
+personas" section). `RollingSummarizer` (`companion/memory/summarizer.py`) is now real too:
+a background job that replaces the oldest raw turns with one summary turn,
+via `MemoryStore.list_turns`/`replace_turns` (see
+`docs/ROLLING_SUMMARIZER.md`). Verified with a fake LLM and real stores
+only; summary quality against a real model is not measured.
 (`llm.voice_mode_override` used to be listed here too; it's now real:
 `companion.app.build_llm` merges its options over `llm.options` in voice
 mode.) Check whether the
@@ -95,13 +171,14 @@ persona you pick — starter personas' `voice_id`s are placeholders, see
 
 ```
 # text mode
-pip install -e ".[dev,memory-chroma]"   # STT/TTS/VAD extras not needed —
+pip install -e ".[dev,memory-chroma,agents]"  # STT/TTS/VAD extras not needed —
                                           # text mode never touches them,
-                                          # see companion/app.py
+                                          # see companion/app.py; `agents` is
+                                          # needed because the example config
+                                          # has an `agent:` section
 cp companion/config/config.example.yaml companion/config/config.yaml
-# edit config.yaml's llm.options.model to a model you've actually
-# `ollama pull`ed — the shipped default isn't pre-pulled for you
-python -m companion
+ollama pull qwen2.5:7b-instruct          # default chat + agent model (tool-capable)
+python -m companion --persona planner
 
 # voice mode: also install stt-whisper,tts-piper,vad-silero,audio-sounddevice,
 # set mode: voice in config.yaml, and point a persona's voice_id at a real
@@ -285,9 +362,10 @@ place backend selection happens, see below.
   no-cross-persona-leak guarantee, not just a filter-correctness one.
   Embeddings use Chroma's own default (ONNX MiniLM-L6, local, no torch).
   `query()`'s ordering is Chroma's own native most-similar-first, not
-  re-sorted. `summarizer.py`'s `RollingSummarizer` is unimplemented and
-  unwired — a background rolling-summarization job for later, not
-  something called inline in the request path.
+  re-sorted. `summarizer.py`'s `RollingSummarizer` is a background job
+  (never inline in the request path) that replaces a scope's oldest raw
+  turns with one summary turn via `MemoryStore.list_turns`/
+  `replace_turns`; see `docs/ROLLING_SUMMARIZER.md`.
 - **`companion/config/config.example.yaml`** — the single source of truth
   for which concrete backend class gets instantiated for each interface.
   If you're about to write `if backend_name == "piper":` anywhere outside
@@ -404,8 +482,8 @@ without being asked):
    `companion/memory/store.py`; `Orchestrator.handle_text_turn` (now real)
    and `.handle_voice_turn` both query/dedup/write real memory each turn
    — see `docs/ARCHITECTURE.md`'s "MemoryStore" section. The summarizer
-   job (`companion/memory/summarizer.py`'s `RollingSummarizer`) stays
-   unimplemented/unwired — out of scope for this step, per that doc.
+   job (`companion/memory/summarizer.py`'s `RollingSummarizer`) was out
+   of scope for this step; it was built later (`docs/ROLLING_SUMMARIZER.md`).
 9. ~~Wire the full app end-to-end~~ — done, for text mode.
    `companion/config/loader.py` reads/validates `config.yaml`;
    `companion/app.py` constructs the real concrete backend instances it
@@ -433,14 +511,24 @@ without being asked):
     automated-tested vs. only verified by manually running a real
     round trip (real VAD/STT/LLM/TTS/MemoryStore/audio hardware
     together) by hand.
-11. Write up real numbers in `docs/HARDWARE_REQUIREMENTS.md` (currently a
-    draft based on published specs, not measured).
+11. ~~Write up real numbers in `docs/HARDWARE_REQUIREMENTS.md`~~ — done:
+    measured on an i7-12700H + RTX 3060 Laptop (6 GB) with
+    `scripts/benchmark_latency.py` (~0.85 s to first audio in voice mode,
+    tool turns under 2 s). CPU-only and Apple Silicon numbers are still
+    open.
 12. ~~Agentic personas~~ — done (asked for explicitly, ahead of 11's
     write-up). Tool registry, LangGraph runner, per-persona tools, two new
     personas (`study_buddy`, `planner`), reminders delivered in text,
     Streamlit and voice mode, voice filler + barge-in. See
     `docs/ARCHITECTURE.md`'s "Agentic personas" section.
-13. Cloud backend adapters — **do not start until explicitly instructed.**
+13. ~~RollingSummarizer~~ — done (`docs/ROLLING_SUMMARIZER.md`):
+    `MemoryStore` gained `list_turns`/`replace_turns`; summaries run as a
+    background task after turns.
+14. **Next, agreed with the user (2026-10-19), after steps 11–13 above:**
+    manual testing, then a React frontend (needs a local API server
+    first), then more tools and agent flows. Don't start one before the
+    previous is done unless asked. Live status: `PROGRESS.md`.
+15. Cloud backend adapters — **do not start until explicitly instructed.**
     The deployed version is a separate project/repo, not this one.
 
 ## Open decisions (don't resolve unilaterally)
@@ -458,7 +546,9 @@ without being asked):
   voice mode, which doesn't fit Streamlit's rerun model) — see
   `docs/ARCHITECTURE.md`'s "Open decisions" entry and
   `companion/ui/README.md`. Not treated as the final or only UI this
-  project will ever have (real-time hands-free voice in a browser, a
-  richer web frontend, a TUI, a desktop app are all still open) — don't
-  assume Streamlit is the answer for a future UI need without checking
-  whether it still fits.
+  project will ever have. **Decided 2026-10-19: the next UI is a React
+  frontend**, which needs a local API server first (HTTP + WebSocket,
+  local only, no auth), since Streamlit calls `Orchestrator` in-process.
+  That server is also what enables hands-free real-time voice in the
+  browser. Framework details (build tool, state management, API shape)
+  are still open; settle them with the user before building.
