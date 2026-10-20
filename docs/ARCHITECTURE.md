@@ -593,8 +593,17 @@ turns. Full design: `docs/ROLLING_SUMMARIZER.md`.
   no persona, memory or conversation window, which is what PromptBuilder
   is for.
 - **Verified** with a fake LLM against real Chroma and MemArk stores,
-  including across processes. Summary *quality* with a real model is not
-  measured.
+  including across processes. Also run through the real CLI loop with
+  qwen2.5:7b (2026-10-20, trigger 6): summary turns replaced the oldest
+  turns, and the facts were still recalled after a restart.
+- **Known risk: summaries can garble a fact.** In that real run, one of two
+  summaries said "a nurse named Pune" (the user is a nurse who lives in
+  Pune). Isolated re-runs of the same batches gave 0 errors in 60
+  summaries, at temperature 0.7 and 0.2 and with a stricter prompt, so
+  it's rare but real. Because a summary *replaces* the raw turns, the
+  error then persists. Not mitigated yet; options include summarizing
+  only whole exchanges, a lower temperature for the summarizer, or
+  keeping the raw turns as well.
 
 ### Persistence across real process restarts (both backends)
 
